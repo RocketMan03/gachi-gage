@@ -1,480 +1,370 @@
-/* 같이가게 MVP 화면. 모든 데이터는 Flask 서버(/api)에 저장된다. */
-const HUES = ["#2F7A63", "#B0603A", "#4E5FA8", "#8A4E8F", "#A8892A", "#3D7F9A"];
+/* 같이가게 화면. 데이터는 Flask 서버(/api)에 저장된다. */
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const won = n => Number(n || 0).toLocaleString("ko-KR") + "원";
+const app = document.getElementById("app");
+const tabbar = document.getElementById("tabbar");
 
-const state = { role: null, view: "start", sel: null, draft: null, aiBusy: false, filter: "전체",
-  projects: [], students: {}, me: "s1", aiLive: false, pick: {}, bookmarks: [],
-  find: { q: "", type: "전체", region: "전체", day: "전체", saved: false }, stu: null, pfTab: "포트폴리오" };
-const P = id => state.projects.find(p => p.id === id);
-const S = id => state.students[id];
+const S = { store: null, aiLive: false, plans: {}, goals: {}, view: "welcome", sel: null, step: 0, edit: null,
+  ob: null, tried: false, log: null, copyF: null, copyText: null, demoPick: false };
 
-/* ---------- 서버 통신 ---------- */
-async function api(path, body, isForm) {
-  const opt = body === undefined ? {} : { method: "POST",
-    headers: isForm ? {} : { "Content-Type": "application/json" },
-    body: isForm ? body : JSON.stringify(body) };
-  const r = await fetch(path, opt);
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || "서버에 연결하지 못했어요.");
-  return data;
-}
-function upd(p) { const i = state.projects.findIndex(x => x.id === p.id); if (i >= 0) state.projects[i] = p; else state.projects.unshift(p); }
-async function act(pid, type, payload) { const p = await api(`/api/projects/${pid}/action`, { type, payload }); upd(p); return p; }
-async function uploadFiles(files) {
-  const out = [];
-  for (const f of [...files].slice(0, 10)) {
-    const fd = new FormData(); fd.append("file", f);
-    out.push(await api("/api/upload", fd, true));
-  }
-  return out;
-}
-const HOME = { owner: "o-home", student: "profile" };
-const ALLOWED = {
-  owner: ["o-home", "o-find", "o-new", "o-apply", "o-student", "work", "progress", "done"],
-  student: ["profile", "me-view", "s-list", "s-detail", "s-mine", "work", "progress", "done"],
+/* ---------- 아이콘 ---------- */
+const I = {
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4l-8 8 8 8"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-9.5-9.2C1 8.4 3.2 4.5 7 4.5c2 0 3.6 1.1 5 2.8 1.4-1.7 3-2.8 5-2.8 3.8 0 6 3.9 4.5 7.3C19.5 16.4 12 21 12 21z"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>',
+  cafe: '<svg viewBox="0 0 24 24" fill="none" stroke="#B8860B" stroke-width="2" stroke-linecap="round"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M16 10h2a2.5 2.5 0 0 1 0 5h-2.3"/><path d="M8 3.5c0 1 1 1.5 1 2.5M12 3.5c0 1 1 1.5 1 2.5"/></svg>',
+  pc: '<svg viewBox="0 0 24 24" fill="none" stroke="#4263EB" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>',
+  hair: '<svg viewBox="0 0 24 24" fill="none" stroke="#D6336C" stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/><path d="M8.5 16L18 4M15.5 16L6 4"/></svg>',
+  food: '<svg viewBox="0 0 24 24" fill="none" stroke="#E8590C" stroke-width="2" stroke-linecap="round"><path d="M3 12h18a9 9 0 0 1-18 0z"/><path d="M8 8c0-2 2-2 2-4M13 8c0-2 2-2 2-4"/></svg>',
+  beer: '<svg viewBox="0 0 24 24" fill="none" stroke="#F08C00" stroke-width="2" stroke-linecap="round"><path d="M6 7h10v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M16 10h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2M6 7a3 3 0 0 1 5-3 3 3 0 0 1 5 3"/></svg>',
+  flower: '<svg viewBox="0 0 24 24" fill="none" stroke="#AE3EC9" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="9" r="2.5"/><path d="M12 6.5a3 3 0 1 1 3 2.5M12 6.5a3 3 0 1 0-3 2.5M9.5 9a3 3 0 1 0 2.5 3M14.5 9a3 3 0 1 1-2.5 3M12 12v9M12 17c2-2 4-2 5-2"/></svg>',
+  dots: '<svg viewBox="0 0 24 24" fill="#868E96"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  megaphone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>',
+  store: '<svg viewBox="0 0 24 24" fill="none" stroke="#2F9E44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10v10h16V10M3 10l2-6h14l2 6zM9 20v-5h6v5"/></svg>',
+  history: '<svg viewBox="0 0 24 24" fill="none" stroke="#1C7ED6" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>',
+  map: '<svg viewBox="0 0 24 24" fill="none" stroke="#0CA678" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="#F59F00" stroke-width="2" stroke-linecap="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>',
+  card: '<svg viewBox="0 0 24 24" fill="none" stroke="#7048E8" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" fill="none" stroke="#E03131" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.6L20 8"/><path d="M20 3v5h-5"/></svg>',
 };
+const KINDS = [["카페", "cafe"], ["음식점", "food"], ["치킨·주점", "beer"], ["PC방", "pc"], ["미용실", "hair"], ["꽃집", "flower"], ["기타", "dots"]];
+const KIND_IC = Object.fromEntries(KINDS);
+const STRENGTHS = {
+  "카페": ["직접 만든 디저트", "넓은 좌석", "콘센트 많은 자리", "조용한 분위기", "합리적인 가격"],
+  "PC방": ["최신 사양 PC", "넓은 단체석", "깨끗한 시설", "다양한 먹거리", "24시간 영업"],
+  "미용실": ["1:1 예약제", "꼼꼼한 상담", "합리적인 가격", "주차 가능"],
+  "음식점": ["푸짐한 양", "직접 만든 반찬", "혼밥하기 편함", "단체석"],
+  "치킨·주점": ["바삭한 튀김", "단체석", "늦게까지 영업", "배달 가능"],
+  "꽃집": ["당일 제작", "맞춤 꽃다발", "배달 가능", "합리적인 가격"],
+  "기타": ["친절한 응대", "합리적인 가격", "오래된 단골", "깨끗한 매장"],
+};
+const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
+const NOTIFY = ["매주 월요일 오전", "매주 금요일 오후", "2주마다 월요일 오전"];
+const REASONS = [["time", "시간이 부족했어요"], ["photo", "사진이 없었어요"], ["skip", "필요 없을 것 같았어요"], ["etc", "기타"]];
+const REASON_TXT = Object.fromEntries(REASONS);
+
+/* ---------- 서버 ---------- */
+async function api(path, body, method) {
+  const opt = body === undefined ? {} : { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+  return d;
+}
+function busy(t) { const b = document.getElementById("busy"); if (t) { document.getElementById("busy-text").textContent = t; b.hidden = false; } else b.hidden = true; }
+let tt; function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 2800); }
+async function run(label, fn) { try { if (label) busy(label); await fn(); } catch (e) { toast(e.message); } finally { busy(); } }
+
 async function boot() {
   try {
-    const d = await api("/api/bootstrap");
-    state.role = d.role;
-    if (!d.role) { state.view = "start"; return render(); }
-    Object.assign(state, { projects: d.projects, students: d.students, me: d.me, aiLive: d.aiLive, bookmarks: d.bookmarks || [], myProfile: d.myProfile });
-    document.getElementById("ai-state").textContent = d.aiLive ? "AI: Claude 연결됨" : "AI: 규칙 기반 예시";
-    if (!ALLOWED[d.role].includes(state.view)) state.view = HOME[d.role];
+    const d = await api("/api/state");
+    Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals });
+    S.view = d.store ? "home" : "welcome";
     render();
-  } catch (e) { app.innerHTML = `<div class="err">${esc(e.message)} 서버(app.py)가 켜져 있는지 확인해 주세요.</div>`; }
+  } catch (e) { app.innerHTML = `<p class="loading-text">${esc(e.message)}</p>`; }
 }
 
-/* ---------- 공통 조각 ---------- */
-const app = document.getElementById("app");
-const ICON = {
-  grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>',
-  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3h7l4 4v14H7z"/><path d="M10 11h5M10 15h5"/></svg>',
-  case: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V4h6v3"/></svg>',
-  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6"/></svg>',
-  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
-  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>',
-  bm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3.5h12v17l-6-4.5-6 4.5z"/></svg>',
-  bmOn: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8"><path d="M6 3.5h12v17l-6-4.5-6 4.5z"/></svg>',
-  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg>',
-  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11l8-7 8 7v9H4z"/></svg>'
-};
-function bar(title, back, right) { return `<header class="bar">${back ? `<button class="iconbtn" data-go="${back}" aria-label="뒤로">‹</button>` : "<span></span>"}<h1>${esc(title)}</h1>${right || "<span></span>"}</header>`; }
-const marked = id => state.bookmarks.includes(id);
-function bmBtn(id) { return `<button class="iconbtn bm ${marked(id) ? "on" : ""}" data-bm="${id}" aria-label="${marked(id) ? "찜 해제" : "찜하기"}" aria-pressed="${marked(id)}">${marked(id) ? ICON.bmOn : ICON.bm}</button>`; }
-function workTile(w, k) { return `<div class="thumb" style="background:${HUES[k % HUES.length]}">${w.img ? `<img src="${esc(w.img)}" alt="">` : esc(w.title)}</div>`; }
-function avatar(s) { return `<div class="avatar" style="background:${HUES[s.id.charCodeAt(1) % HUES.length]}">${esc(s.name[0])}</div>`; }
-function tabs() {
-  const t = state.role === "owner"
-    ? [["o-home", "내 의뢰", "home"], ["o-find", "학생 찾기", "search"], ["o-new", "의뢰하기", "plus"], ["work", "진행 작업", "case"]]
-    : [["s-list", "프로젝트", "grid"], ["s-mine", "내 지원", "doc"], ["work", "진행 작업", "case"], ["profile", "프로필", "user"]];
-  const v = state.view;
-  const cur = v === "o-new" ? "o-new" : ["progress", "done", "work"].includes(v) ? "work" : v === "s-detail" ? "s-list" : v === "o-apply" ? "o-home" : v === "o-student" ? "o-find" : v === "me-view" ? "profile" : v;
-  return `<nav class="tabs ${t.length === 3 ? "three" : ""}">${t.map(([k, l, i]) => `<button data-go="${k}" ${cur === k ? 'aria-current="page"' : ""}>${ICON[i]}${l}</button>`).join("")}</nav>`;
-}
-function thumb(p) { const img = p.refImgs?.[0]; return `<div class="thumb" style="background:${HUES[(p.hue || 0) % HUES.length]}">${img ? `<img src="${esc(img)}" alt="">` : esc(p.shop)}</div>`; }
-function metaLine(p) { return `<div class="meta"><span>${esc(p.area)}</span><span>선정 후 ${p.days}일</span><span>수정 ${p.revisions}회</span>${p.visit ? `<span>방문 ${p.visit}회</span>` : ""}</div>`; }
-const STAGES = ["매칭 완료", "작업 중", "중간 확인", "최종 제출"];
-const stageIdx = p => ({ matched: 1, review: 2, final: 3, done: 4 }[p.status] ?? 0);
-function stepsHTML(p) {
-  const i = stageIdx(p);
-  return `<div class="steps"><div class="fill" style="width:${Math.max(0, Math.min(i - 1, 3)) / 3 * 75}%"></div>${STAGES.map((s, k) => `<div class="step ${k < i ? "on" : ""} ${k === i ? "now" : ""}"><div class="dot">${k < i ? "✓" : ""}</div>${s}</div>`).join("")}</div>`;
-}
-function termsHTML(p) {
-  return `<dl class="kv"><dt>작업 범위</dt><dd>${esc(p.items.join(" + "))}</dd><dt>프로젝트 금액</dt><dd>${won(p.pay)}</dd>
-  <dt>작업 기한</dt><dd>선정 후 ${p.days}일</dd><dt>수정 조건</dt><dd>통합 수정 ${p.revisions}회</dd>${p.visit ? `<dt>매장 방문</dt><dd>${p.visit}회</dd>` : ""}</dl>`;
-}
-const spin = t => `<span class="spin"></span> ${t}`;
+/* ---------- 상태 도우미 ---------- */
+const P = () => S.store.profile;
+const curWeek = () => S.store.weeks[S.store.weeks.length - 1];
+function findRec(id) { for (const w of S.store.weeks) for (const r of w.recs) if (r.id === id) return { w, r }; return {}; }
+const newOb = () => ({ name: "", kind: "", kind_etc: "", region: "", hours: "", closed: [], products: [{ name: "", price: "" }],
+  strengths: [], goals: [], goal_text: "", notify: NOTIFY[0] });
 
-function findList() {
-  const f = state.find, q = f.q.trim().toLowerCase();
-  const list = Object.values(state.students).filter(s =>
-    (!q || [s.name, s.major, s.headline, ...s.tags].join(" ").toLowerCase().includes(q)) &&
-    (f.type === "전체" || s.tags.includes(f.type)) &&
-    (f.region === "전체" || s.region.includes(f.region)) &&
-    (f.day === "전체" || s.avail.includes(f.day)) &&
-    (!f.saved || marked(s.id))
-  ).sort((a, b) => (b.open - a.open) || (b.done - a.done));
-  if (!list.length) return `<div class="empty">조건에 맞는 학생이 없어요. 필터를 바꿔 보세요.</div>`;
-  return list.map(s => `<article class="card">
-    <div class="shead">${avatar(s)}<div class="shead-main"><div class="sname">${esc(s.name)}</div><div class="psub">${esc(s.school)} ${esc(s.major)}</div></div>
-      <div class="shead-side">${bmBtn(s.id)}<span class="pill ${s.open ? "" : "off"}">${s.open ? "의뢰 가능" : "의뢰 마감"}</span></div></div>
-    <strong class="headline">${esc(s.headline)}</strong>
-    <div class="chips">${s.tags.map(x => `<span class="tag">${esc(x)}</span>`).join("")}<span class="tag">영남대 인근</span></div>
-    <div class="pf">${s.works.slice(0, 3).map(workTile).join("")}</div>
-    <div class="meta"><span>${ICON.pin.replace("<svg", '<svg class="ic"')}${esc(s.region)}</span><span>${ICON.home.replace("<svg", '<svg class="ic"')}${esc(s.avail)}</span><span>후기 ${s.reviews.length}</span></div>
-    <button class="btn ghost" data-stu="${s.id}">포트폴리오 보기</button></article>`).join("");
-}
+/* ---------- 질문 단계 ---------- */
+const STEPS = [
+  { k: "name", q: "안녕하세요\n가게 이름을 알려주세요", ok: o => o.name.trim().length > 0, err: "가게 이름을 다시 확인해주세요",
+    body: o => `<div class="field ${S.tried && !o.name.trim() ? "err" : ""}"><label for="ob-name">가게 이름</label>
+      <input class="big-input" id="ob-name" data-ob="name" value="${esc(o.name)}" placeholder="가게 이름" autocomplete="off" maxlength="30">
+      ${S.tried && !o.name.trim() ? `<span class="err-text">가게 이름을 다시 확인해주세요</span>` : ""}</div>` },
+  { k: "kind", q: "어떤 가게인가요?", ok: o => !!o.kind && (o.kind !== "기타" || o.kind_etc.trim()), err: "업종을 골라 주세요",
+    body: o => `<div class="tiles">${KINDS.map(([k, ic]) => `<button class="tile" data-kind="${k}" aria-pressed="${o.kind === k}">${I[ic]}<span>${k}</span></button>`).join("")}</div>
+      ${o.kind === "기타" ? `<div class="field"><label for="ob-etc">어떤 가게인지 적어 주세요</label><input class="mid-input" id="ob-etc" data-ob="kind_etc" value="${esc(o.kind_etc)}" placeholder="예) 반찬가게, 공방"></div>` : ""}` },
+  { k: "region", q: "가게는 어디에 있나요?", sub: "동네 이름까지만 적어도 괜찮아요.", ok: () => true,
+    body: o => `<div class="field"><label for="ob-region">주소 또는 동네</label><input class="big-input" id="ob-region" data-ob="region" value="${esc(o.region)}" placeholder="예) 경산시 대학로"></div>` },
+  { k: "hours", q: "영업시간을 알려주세요", ok: () => true,
+    body: o => `<div class="field"><label for="ob-hours">영업시간</label><input class="big-input" id="ob-hours" data-ob="hours" value="${esc(o.hours)}" placeholder="예) 10:00 ~ 22:00"></div>
+      <div class="field"><span class="field-label">쉬는 날</span><div class="chips">${DAYS.map(d => `<button class="chip" data-closed="${d}" aria-pressed="${o.closed.includes(d)}">${d}</button>`).join("")}</div></div>` },
+  { k: "products", q: "대표 상품과 가격을\n알려주세요", sub: "홍보할 때 가격을 정확하게 쓰기 위해서예요.", ok: o => o.products.some(p => p.name.trim()), err: "대표 상품을 하나 이상 적어 주세요",
+    body: o => `${o.products.map((p, i) => `<div class="prod-row">
+        <div class="field"><label for="pn${i}">상품·서비스</label><input class="mid-input" id="pn${i}" data-prod="name" data-i="${i}" value="${esc(p.name)}" placeholder="예) 딸기 라떼"></div>
+        <div class="field"><label for="pp${i}">가격</label><input class="mid-input" id="pp${i}" data-prod="price" data-i="${i}" value="${esc(p.price)}" placeholder="5,500원"></div>
+        ${o.products.length > 1 ? `<button class="del" data-delprod="${i}" aria-label="삭제">×</button>` : "<span></span>"}</div>`).join("")}
+      ${o.products.length < 5 ? `<button class="add-row" id="add-prod">+ 상품 추가</button>` : ""}` },
+  { k: "strengths", q: "우리 가게의 자랑은\n뭔가요?", sub: "여러 개 골라도 좋아요. 홍보 문구에 들어가요.", ok: () => true,
+    body: o => { const list = [...new Set([...(STRENGTHS[o.kind] || STRENGTHS["기타"]), ...o.strengths])];
+      return `<div class="chips">${list.map(x => `<button class="chip" data-str="${esc(x)}" aria-pressed="${o.strengths.includes(x)}">${esc(x)}</button>`).join("")}</div>
+      <div class="field"><label for="ob-str">직접 적기</label><input class="mid-input" id="ob-str" placeholder="예) 창가 자리 햇살" maxlength="30"></div>
+      <button class="add-row" id="add-str">+ 추가</button>`; } },
+  { k: "goals", q: "이번에 가장 알리고 싶은 건\n뭔가요?", sub: "처음 고른 것을 가장 먼저 추천해요. 3개까지 고를 수 있어요.", ok: o => o.goals.length > 0, err: "하나 이상 골라 주세요",
+    body: o => `<div class="choices">${Object.entries(S.goals).map(([k, v]) => { const i = o.goals.indexOf(k);
+        return `<button class="choice" data-goal="${k}" aria-pressed="${i >= 0}"><span>${esc(v)}</span>${i === 0 ? '<span class="badge">가장 중요</span>' : i > 0 ? '<span class="badge">선택</span>' : ""}</button>`; }).join("")}</div>
+      <div class="field"><label for="ob-goal">하고 싶은 말을 편하게 적어 주세요 (선택)</label>
+      <textarea class="area" id="ob-goal" data-ob="goal_text" maxlength="80" placeholder="예) 새로 바꾼 좌석을 알리고 싶어요">${esc(o.goal_text)}</textarea></div>` },
+  { k: "notify", q: "언제 알려드릴까요?", sub: "이 시간에 이번 주 할 일을 알려드려요.", ok: () => true,
+    body: o => `<div class="choices">${NOTIFY.map(n => `<button class="choice" data-notify="${n}" aria-pressed="${o.notify === n}"><span>${n}</span></button>`).join("")}</div>` },
+  { k: "confirm", q: "이렇게 등록할게요", sub: "나중에 둘러보기 → 가게 정보에서 바꿀 수 있어요.", ok: () => true,
+    body: o => `<dl class="summary">
+      <div><dt>가게 이름</dt><dd>${esc(o.name)}</dd></div>
+      <div><dt>업종</dt><dd>${esc(o.kind === "기타" ? o.kind_etc || "기타" : o.kind)}</dd></div>
+      <div><dt>위치</dt><dd>${esc(o.region || "입력 안 함")}</dd></div>
+      <div><dt>영업시간</dt><dd>${esc(o.hours || "입력 안 함")}${o.closed.length ? ` · ${o.closed.join("·")} 휴무` : ""}</dd></div>
+      <div><dt>대표 상품</dt><dd>${esc(o.products.filter(p => p.name).map(p => p.name + (p.price ? " " + p.price : "")).join(", "))}</dd></div>
+      <div><dt>자랑</dt><dd>${esc(o.strengths.join(", ") || "입력 안 함")}</dd></div>
+      <div><dt>알리고 싶은 것</dt><dd>${esc(o.goals.map(g => S.goals[g]).join(", "))}</dd></div>
+      <div><dt>알림</dt><dd>${esc(o.notify)}</dd></div></dl>` },
+];
 
 /* ---------- 화면 ---------- */
-const views = {
-  "start"() {
-    return `<section class="content start">
-    <div class="start-hero"><div class="start-logo">같이가게</div>
-      <h1>동네 가게와 대학생이<br>함께 만드는 실무 프로젝트</h1>
-      <p class="psub">어떤 분으로 시작할지 골라 주세요. 고른 쪽 화면만 보여요.</p></div>
-    <div class="role-grid">
-    <button class="role-card" data-role="owner"><span class="role-ic">${ICON.home}</span><span class="role-txt"><strong>사장님</strong>
-      <span class="psub">대학생에게 디자인·홍보 작업 맡기기</span></span><span class="role-go">시작하기 ›</span></button>
-    <button class="role-card" data-role="student"><span class="role-ic">${ICON.user}</span><span class="role-txt"><strong>학생</strong>
-      <span class="psub">내 프로필 올리고 실무 의뢰 받기</span></span><span class="role-go">시작하기 ›</span></button>
-    </div>
+const V = {
+  welcome() {
+    return `<section class="page"><div class="welcome">
+      <svg class="logo" viewBox="0 0 72 72" aria-hidden="true"><rect width="72" height="72" rx="22" fill="#FFD43B"/><path d="M18 32l4-12h28l4 12" fill="none" stroke="#191F28" stroke-width="4" stroke-linejoin="round"/><path d="M20 32v20h32V32" fill="none" stroke="#191F28" stroke-width="4" stroke-linejoin="round"/><path d="M30 52V42h12v10" fill="none" stroke="#191F28" stroke-width="4"/></svg>
+      <h1>우리 가게 홍보,<br>이번 주엔 뭘 할지<br>알려드릴게요</h1>
+      <p>가게 정보를 한 번만 알려주시면, 매주 우리 가게에 맞는 홍보와 문구를 준비해 드려요.</p>
+      ${S.demoPick ? `<div class="tiles">${["PC방", "카페", "미용실"].map(k => `<button class="tile" data-demo="${k}">${I[KIND_IC[k]]}<span>${k}<small>예시 가게로 보기</small></span></button>`).join("")}</div>` : ""}
+    </div><div class="bottom-cta"><button class="cta" id="start">우리 가게 등록하기</button>
+      <button class="cta ghost sm" id="demo-pick">${S.demoPick ? "닫기" : "예시 가게로 둘러보기"}</button></div></section>`;
+  },
+  ob() {
+    const st = STEPS[S.step], o = S.ob, editing = !!S.edit;
+    const pct = editing ? 100 : Math.round((S.step + 1) / STEPS.length * 100);
+    const last = S.step === STEPS.length - 1;
+    return `<section class="page"><div class="page-top">
+      <button class="icon-btn" id="ob-back" aria-label="${S.step === 0 || editing ? "닫기" : "뒤로"}">${S.step === 0 || editing ? I.close : I.back}</button>
+      ${editing ? "<span></span>" : `<div class="progress" aria-label="진행 ${pct}%"><i style="width:${pct}%"></i></div>`}<span style="width:48px"></span></div>
+      <div class="page-body"><h1 class="q">${esc(st.q)}</h1>${st.sub ? `<p class="q-sub">${esc(st.sub)}</p>` : ""}${st.body(o)}
+      ${S.tried && !st.ok(o) && st.k !== "name" ? `<span class="err-text">${esc(st.err)}</span>` : ""}</div>
+      <div class="bottom-cta"><button class="cta" id="ob-next">${editing ? "저장하기" : last ? "추천 받기" : "다음"}</button></div></section>`;
+  },
+  home() {
+    const s = S.store, p = s.profile, w = curWeek(), [top, ...rest] = w.recs;
+    const pending = w.recs.filter(r => !r.log);
+    const weeks = s.weeks.slice(-6);
+    const doneAll = s.weeks.reduce((n, x) => n + x.recs.filter(r => r.log?.done).length, 0);
+    return `<section class="screen">
+    <div class="hero"><div><h1>요약</h1><p>${esc(w.label)} · ${esc(p.name)}</p></div><button class="avatar" data-go="info" aria-label="가게 정보">${esc(p.name[0])}</button></div>
+    <article class="card"><div class="strip todo">이번 주 할 일 <span>${esc(w.label)}</span></div><div class="card-body">
+      ${w.adjust ? `<div class="adjust"><b>기록 반영</b><span>${esc(w.adjust)}</span></div>` : ""}
+      <div class="rec-main"><div class="rec-ic">${I.megaphone}</div><div>
+        <div class="rec-title">${esc(top.title)}</div><div class="rec-desc">${esc(top.what)}</div>
+        <div class="meta"><span>${esc(top.when)}</span><span>${esc(top.channel)}</span><span>${esc(top.effort)}</span>${top.needs_photo ? "<span>사진 필요</span>" : '<span class="ok">사진 없이 가능</span>'}</div>
+      </div></div>
+      <div class="btn-row"><button class="soft-btn" data-rec="${top.id}">자세히 보기</button><button class="soft-btn yellow" data-copy="${top.id}">홍보 문구 만들기</button></div>
+    </div></article>
+    ${rest.length ? `<article class="card"><div class="card-head">이어서 해 볼 홍보</div><div class="rows" style="margin-top:6px">
+      ${rest.map(r => `<button class="row" data-rec="${r.id}"><span class="row-main"><strong>${esc(r.title)}</strong><span>${esc(r.when)} · ${esc(r.effort)}</span></span><span class="chev">›</span></button>`).join("")}</div></article>` : ""}
+    <article class="card"><div class="strip log">실행 기록 <span>${pending.length ? `${pending.length}개 남음` : "이번 주 완료"}</span></div><div class="card-body">
+      ${pending.length ? `<div class="rec-title" style="font-size:20px">이번 주 추천을 해 보셨나요?</div><div class="rec-desc">했는지, 못 했다면 왜 못 했는지만 알려주세요. 다음 주 추천이 달라져요.</div>
+        <div class="btn-row"><button class="soft-btn" data-log="${pending[0].id}">'${esc(pending[0].title)}' 기록하기</button></div>`
+        : `<div class="rec-desc">이번 주 기록을 모두 남기셨어요. 다음 주 추천에 반영돼요.</div><div class="btn-row"><button class="soft-btn" data-go="log">기록 보기</button></div>`}
+    </div></article>
+    <article class="card"><div class="card-head">지금까지 실행한 홍보 <span class="big-num">${doneAll}개</span></div><div class="card-body chart">
+      <div class="bars">${weeks.map(x => { const n = x.recs.filter(r => r.log?.done).length; return `<div class="bar" title="${esc(x.label)} ${n}개"><i class="${n ? "" : "zero"}" style="height:${Math.max(6, n / 3 * 100)}%"></i></div>`; }).join("")}</div>
+      <div class="bar-labels">${weeks.map(x => `<span>${x.week}주</span>`).join("")}</div></div></article>
+    <article class="card"><div class="strip local">우리 동네 소식 <span>추천에 참고했어요</span></div><div class="card-body">
+      ${w.ctx.map(c => `<div class="ctx"><strong>${esc(c.title)}</strong><p>${esc(c.detail)}</p><span class="src">출처: ${esc(c.source)} · 기준일 ${esc(c.date)}</span></div>`).join("")}</div></article>
+    <p class="note">AI: ${S.aiLive ? "Claude 연결됨" : "예시 규칙으로 작동 중 (API 키를 넣으면 실제 AI)"}${s.demo ? " · 예시 가게로 보는 중" : ""}</p>
     </section>`;
   },
-  "o-home"() {
-    const mine = state.projects.filter(p => p.mine);
-    return bar("내 의뢰") + `<section class="content">
-    <div class="ai-box"><span class="ai-badge">✦ AI 의뢰서</span><div>무엇이 필요한지 말로 적으면 AI가 작업 범위, 보수, 기간, 수정 횟수를 채워 드려요.</div>
-    <button class="btn ai" data-go="o-new">새 의뢰 만들기</button></div>
-    <div class="sec"><h2>내 의뢰 ${mine.length}건</h2>
-    ${mine.map(p => `<article class="card"><div class="pcard">${thumb(p)}<div><div class="ptitle">${esc(p.shop)}</div><div class="psub">${esc(p.title)}</div>
-      <div class="price">${won(p.pay)}</div>${metaLine(p)}</div></div>
-      ${p.status === "open" ? `<button class="btn ${p.applicants.length ? "" : "ghost"}" data-apply="${p.id}" ${p.applicants.length ? "" : "disabled"}>${p.invited ? `지명한 학생(${esc(S(p.invited).name)}) 확정하기` : p.applicants.length ? `지원자 ${p.applicants.length}명 보기` : "지원자를 기다리는 중"}</button>`
-        : `<button class="btn ghost" data-progress="${p.id}">${p.status === "done" ? "완료된 프로젝트 보기" : "진행 현황 보기 · " + STAGES[Math.min(stageIdx(p), 3)]}</button>`}</article>`).join("")}</div></section>` + tabs();
+  rec() {
+    const { r } = findRec(S.sel); if (!r) return V.home();
+    const lab = { fact: "사실", context: "지역 정보", suggestion: "제안" };
+    return `<section class="page"><div class="page-top"><button class="icon-btn" data-go="home" aria-label="뒤로">${I.back}</button><span></span><span style="width:48px"></span></div>
+      <div class="page-body"><h1 class="detail-title">${esc(r.title)}</h1>
+      <div class="meta">${r.needs_photo ? "<span>사진 필요</span>" : '<span class="ok">사진 없이 가능</span>'}<span>${esc(r.effort)}</span>${r.log ? `<span class="${r.log.done ? "ok" : ""}">${r.log.done ? "했어요" : "못 했어요"}</span>` : ""}</div>
+      <dl class="kv-list"><div><dt>누구에게</dt><dd>${esc(r.target)}</dd></div><div><dt>무엇을</dt><dd>${esc(r.what)}</dd></div>
+        <div><dt>언제</dt><dd>${esc(r.when)}</dd></div><div><dt>어디에</dt><dd>${esc(r.channel)}</dd></div><div><dt>왜</dt><dd>${esc(r.why)}</dd></div></dl>
+      <details class="basis"><summary>추천 근거 펼쳐 보기</summary><ul>${(r.basis || []).map(b => `<li><span class="tag ${esc(b.type)}">${lab[b.type] || "참고"}</span><span>${esc(b.text)}</span></li>`).join("")}</ul></details>
+      </div><div class="bottom-cta"><button class="cta" data-copy="${r.id}">홍보 문구 만들기</button><button class="cta ghost sm" data-log="${r.id}">${r.log ? "기록 고치기" : "기록 남기기"}</button></div></section>`;
   },
-  "o-new"() {
-    const d = state.draft || (state.draft = { shop: "카페 온담", text: "", title: "", types: [], items: ["", ""], pay: "", days: "", revisions: "", visit: "", refImgs: [], materials: "", apply: [], tips: null, live: null });
-    const T = ["사진 촬영", "SNS 제작", "메뉴판", "홍보물 제작", "로고"];
-    const inv = d.invite && S(d.invite);
-    return bar(inv ? "지명 의뢰 보내기" : "어떤 도움이 필요하세요?", inv ? "o-student" : "o-home") + `<section class="content">
-    ${inv ? `<div class="card invite">${avatar(inv)}<div><strong>${esc(inv.name)} 학생에게 보내는 의뢰예요</strong><div class="psub">${esc(inv.headline)} · 다른 학생에게는 보이지 않아요</div></div></div>` : ""}
-    <div class="ai-box"><span class="ai-badge">✦ 말로 설명하기</span>
-      <label class="sr" for="ai-text">필요한 작업 설명</label>
-      <textarea class="input" id="ai-text" placeholder="예) 겨울 신메뉴 3종이 나왔는데 인스타에 올릴 사진이 없어요. 사진 찍어서 게시물로 만들어 주세요.">${esc(d.text)}</textarea>
-      <button class="btn ai" id="ai-fill" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? spin("의뢰서 작성 중") : "AI로 의뢰서 채우기"}</button>
-      ${d.tips ? `<div class="stack">${d.tips.map(t => `<div class="reason">${esc(t)}</div>`).join("")}${d.live === false ? '<div class="hint">AI 키가 없어 예시 규칙으로 채웠어요.</div>' : ""}</div>` : ""}
-    </div>
-    <div class="sec"><label class="label" for="f-shop">가게 이름</label><input class="input" id="f-shop" value="${esc(d.shop)}"></div>
-    <div class="sec"><div class="label">작업 종류 <span>(복수 선택 가능)</span></div>
-      <div class="chips">${T.map(t => `<button class="chip" data-type="${t}" aria-pressed="${d.types.includes(t)}">${t}</button>`).join("")}</div></div>
-    <div class="sec"><label class="label" for="f-title">프로젝트 제목</label><input class="input" id="f-title" value="${esc(d.title)}" placeholder="신메뉴 사진 및 인스타 게시물 제작"></div>
-    <div class="sec"><div class="label">작업 수량</div><div class="row2">
-      <input class="input" id="f-item0" aria-label="작업 수량 1" value="${esc(d.items[0] || "")}" placeholder="사진 5장">
-      <input class="input" id="f-item1" aria-label="작업 수량 2" value="${esc(d.items[1] || "")}" placeholder="게시물 3개"></div></div>
-    <div class="row2"><div class="sec"><label class="label" for="f-pay">프로젝트 보수</label><input class="input" id="f-pay" inputmode="numeric" value="${esc(d.pay)}" placeholder="200000"></div>
-      <div class="sec"><label class="label" for="f-days">작업 기간 <span>선정 후 일수</span></label><input class="input" id="f-days" inputmode="numeric" value="${esc(d.days)}" placeholder="7"></div></div>
-    <div class="row2"><div class="sec"><label class="label" for="f-rev">수정 횟수</label><input class="input" id="f-rev" inputmode="numeric" value="${esc(d.revisions)}" placeholder="1"></div>
-      <div class="sec"><label class="label" for="f-visit">매장 방문 <span>횟수</span></label><input class="input" id="f-visit" inputmode="numeric" value="${esc(d.visit)}" placeholder="0"></div></div>
-    <div class="sec"><div class="label">참고 이미지 <span>${d.refImgs.length}/10</span></div>
-      <div class="upload">${d.refImgs.map(s => `<div class="ph"><img src="${esc(s)}" alt="참고 이미지"></div>`).join("")}
-      <label for="f-img">+ 사진</label><input type="file" id="f-img" accept="image/*" multiple class="sr"></div></div>
-    <div class="stack"><button class="btn" id="f-submit">${inv ? esc(inv.name) + " 학생에게 의뢰 보내기" : "의뢰 올리기"}</button><button class="btn ghost" data-go="o-home">임시 저장</button></div>
-    </section>` + tabs();
+  copy() {
+    const { w, r } = findRec(S.sel); if (!r) return V.home();
+    const f = S.copyF, c = w.copies[r.id], plan = S.store.planInfo;
+    const fld = (k, l, ph) => `<div class="field"><label for="cf-${k}">${l}</label><input class="mid-input" id="cf-${k}" data-cf="${k}" value="${esc(f[k])}" placeholder="${ph}"></div>`;
+    return `<section class="page"><div class="page-top"><button class="icon-btn" data-rec="${r.id}" aria-label="뒤로">${I.back}</button><span></span><span style="width:48px"></span></div>
+      <div class="page-body"><h1 class="q">${c ? "홍보 문구가\n준비됐어요" : "틀린 내용이 없는지\n확인해 주세요"}</h1>
+      <p class="q-sub">${esc(r.title)} · ${esc(r.channel)}</p>
+      ${c ? `<div class="result"><textarea id="cp-text" aria-label="홍보 문구">${esc(S.copyText ?? c.text)}</textarea>
+          <div class="hashtags">${esc((c.hashtags || []).join(" "))}</div></div>
+        <div class="btn-row"><button class="soft-btn yellow" id="cp-copy">문구 복사하기</button><a class="soft-btn" href="https://www.instagram.com/" target="_blank" rel="noopener" style="text-decoration:none">인스타그램 열기</a></div>
+        <p class="note">${c.live ? "Claude가 만든 문구예요." : "예시 규칙으로 만든 문구예요."} 올리기 전에 한 번 더 읽어 보세요. 자동으로 올리지 않아요.</p>
+        <details class="basis"><summary>들어간 내용 고치고 다시 만들기</summary><div style="display:flex;flex-direction:column;gap:18px;margin-top:14px">
+          ${fld("name", "가게 이름", "")}${fld("product", "상품·서비스", "예) 딸기 라떼")}${fld("price", "가격", "예) 5,500원")}${fld("period", "기간", "예) 12월 한 달")}${fld("condition", "이용 조건", "예) 평일 오후 2~5시")}
+          <button class="soft-btn" id="cp-make">다시 만들기</button></div></details>`
+      : `${fld("name", "가게 이름", "")}${fld("product", "상품·서비스", "예) 딸기 라떼")}${fld("price", "가격", "예) 5,500원")}${fld("period", "기간 (선택)", "예) 12월 한 달")}${fld("condition", "이용 조건 (선택)", "예) 평일 오후 2~5시")}`}
+      <div class="usage"><span class="note" style="padding:0">이번 달 문구 만들기 ${plan.used}/${plan.copies}회 사용 · ${esc(plan.name)} 플랜</span><div class="usage-bar"><i style="width:${Math.min(100, plan.used / plan.copies * 100)}%"></i></div></div>
+      </div>${c ? `<div class="bottom-cta"><button class="cta" data-log="${r.id}">${r.log ? "기록 고치기" : "올렸어요, 기록하기"}</button></div>`
+        : `<div class="bottom-cta"><button class="cta" id="cp-make">문구 만들기</button></div>`}</section>`;
   },
-  "o-find"() {
-    const f = state.find, all = Object.values(state.students);
-    const types = ["전체", ...new Set(all.flatMap(s => s.tags))];
-    const sel = (id, label, opts, val) => `<label class="sr" for="${id}">${label}</label><select class="input sel" id="${id}">${opts.map(o => `<option value="${esc(o)}" ${o === val ? "selected" : ""}>${o === "전체" ? label : esc(o)}</option>`).join("")}</select>`;
-    return bar("함께할 대학생 찾기") + `<section class="content">
-    <div class="search">${ICON.search}<label class="sr" for="find-q">검색</label><input class="input" id="find-q" value="${esc(f.q)}" placeholder="이름, 학과, 작업 종류로 검색하기"></div>
-    <div class="selects">${sel("find-type", "작업 종류", types, f.type)}${sel("find-region", "지역", ["전체", "경산", "대구"], f.region)}${sel("find-day", "일정", ["전체", "평일", "주말"], f.day)}</div>
-    <div class="sec"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2>학생 둘러보기</h2>
-      <button class="chip" id="find-saved" aria-pressed="${f.saved}">찜한 학생만</button></div>
-      <div class="stack" id="find-list">${findList()}</div></div></section>` + tabs();
+  logrec() {
+    const { r } = findRec(S.sel); if (!r) return V.home();
+    const L = S.log;
+    const rf = (k, l, ph) => `<div class="field"><label for="lr-${k}">${l}</label><input class="mid-input" id="lr-${k}" data-react="${k}" value="${esc(L.reaction[k] || "")}" placeholder="${ph}" inputmode="numeric"></div>`;
+    return `<section class="page"><div class="page-top"><button class="icon-btn" data-rec="${r.id}" aria-label="뒤로">${I.back}</button><span></span><span style="width:48px"></span></div>
+      <div class="page-body"><h1 class="q">'${esc(r.title)}'\n해 보셨나요?</h1>
+      <div class="tiles"><button class="tile" data-done="1" aria-pressed="${L.done === true}"><svg viewBox="0 0 24 24" fill="none" stroke="#0CA678" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/></svg>했어요</button>
+        <button class="tile" data-done="0" aria-pressed="${L.done === false}"><svg viewBox="0 0 24 24" fill="none" stroke="#E03131" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>못 했어요</button></div>
+      ${L.done === false ? `<div class="field"><span class="field-label">어떤 이유였나요?</span><div class="choices">${REASONS.map(([k, t]) => `<button class="choice" data-reason="${k}" aria-pressed="${L.reason === k}"><span>${t}</span></button>`).join("")}</div></div>` : ""}
+      ${L.done === true ? `<div class="field"><span class="field-label">반응이 있었나요? 아는 만큼만 적어 주세요 (선택)</span></div>${rf("inquiries", "문의·예약 수", "예) 3")}${rf("likes", "좋아요·조회 수", "예) 120")}${rf("sales", "매출 메모", "예) 평소보다 조금 많았어요")}
+        <p class="note" style="padding:0">매출이 달라져도 홍보만의 효과라고 단정하지 않아요. 다음 추천을 고르는 참고 자료로만 써요.</p>` : ""}
+      </div><div class="bottom-cta"><button class="cta" id="lr-save" ${L.done === null || (L.done === false && !L.reason) ? "disabled" : ""}>기록하기</button></div></section>`;
   },
-  "o-student"() {
-    const own = state.view === "me-view", s = S(own ? state.me : state.stu), t = state.pfTab;
-    const cta = own ? `<button class="btn ghost" data-go="profile">프로필 수정하기</button>`
-      : `<button class="btn" data-invite="${s.id}" ${s.open ? "" : "disabled"}>${s.open ? "이 학생에게 의뢰하기" : "지금은 의뢰를 받지 않아요"}</button>`;
-    const rv = r => `<div class="rev"><div class="rev-head"><span>${esc(r.user)}</span><span class="stars-sm">${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)}</span></div><div>${esc(r.text)}</div></div>`;
-    const body = t === "포트폴리오" ? `
-      <div class="sec"><div class="sec-head"><h2 class="h-lg">작업물</h2><span class="hint">전체 ${s.works.length}</span></div>
-        <div class="works">${s.works.map((w, k) => `<figure>${workTile(w, k + 1)}<figcaption><strong>${esc(w.title)}</strong><span>${esc(w.kind)} · ${esc(w.tags.join(", "))}</span></figcaption></figure>`).join("")}</div></div>
-      <div class="sec"><h2 class="h-lg">함께할 수 있는 작업</h2>
-        <div class="card">${s.services.map(v => `<div class="svc"><span>${esc(v.name)}</span><strong>${esc(v.price)}</strong></div>`).join("")}
-        ${cta}</div></div>
-      <div class="sec"><div class="sec-head"><h2 class="h-lg">사장님 후기 <span class="hint">(${s.reviews.length})</span></h2>${s.reviews.length > 2 ? `<button class="linkbtn" data-pftab="후기">전체 보기</button>` : ""}</div>
-        ${s.reviews.length ? `<div class="card">${s.reviews.slice(0, 2).map(rv).join("")}</div>` : `<div class="empty">아직 후기가 없어요.</div>`}</div>`
-    : t === "소개" ? `<div class="sec"><p class="intro">${esc(s.intro)}</p>
-        <dl class="kv"><dt>학교</dt><dd>${esc(s.school)}</dd><dt>학과</dt><dd>${esc(s.major)}</dd><dt>활동 지역</dt><dd>${esc(s.region)}</dd>
-        <dt>방문 일정</dt><dd>${esc(s.avail)}</dd><dt>완료 프로젝트</dt><dd>${s.done}건</dd><dt>잘하는 작업</dt><dd>${esc(s.tags.join(", "))}</dd></dl></div>
-        ${cta}`
-    : `<div class="sec">${s.reviews.length ? `<div class="card">${s.reviews.map(rv).join("")}</div>` : `<div class="empty">아직 후기가 없어요.</div>`}</div>`;
-    return bar(own ? "사장님에게 보이는 내 프로필" : "포트폴리오", own ? "profile" : "o-find", own ? "" : bmBtn(s.id)) + `<section class="content">
-    <div class="shead">${avatar(s)}<div class="shead-main"><div class="sname">${esc(s.name)}</div><div class="psub">${esc(s.school)} ${esc(s.major)}</div></div>
-      <span class="pill ${s.open ? "" : "off"}">${s.open ? "의뢰 가능" : "의뢰 마감"}</span></div>
-    <div class="stack"><strong class="headline">${esc(s.headline)}</strong>
-      <div class="chips">${s.tags.map(x => `<span class="tag">${esc(x)}</span>`).join("")}</div>
-      <div class="meta"><span>${ICON.pin.replace("<svg", '<svg class="ic"')}${esc(s.region)}</span><span>${ICON.home.replace("<svg", '<svg class="ic"')}${esc(s.avail)}</span></div></div>
-    <div class="seg" role="tablist">${["포트폴리오", "소개", "후기"].map(x => `<button role="tab" data-pftab="${x}" aria-selected="${t === x}">${x}</button>`).join("")}</div>
-    ${body}</section>` + tabs();
+  log() {
+    const s = S.store, w = curWeek(), anyLog = w.recs.some(r => r.log);
+    const st = r => r.log ? (r.log.done ? '<span class="status done">했어요</span>' : `<span class="status miss">${esc(REASON_TXT[r.log.reason] || "못 했어요")}</span>`) : '<span class="status">기록 전</span>';
+    return `<section class="screen"><div class="hero"><div><h1>기록</h1><p>기록할수록 우리 가게에 맞는 추천이 돼요</p></div></div>
+      <article class="card"><div class="strip log">${esc(w.label)} <span>이번 주</span></div><div class="rows">
+        ${w.recs.map(r => `<button class="row" data-log="${r.id}"><span class="row-main"><strong>${esc(r.title)}</strong><span>${esc(r.channel)} · ${esc(r.effort)}</span></span>${st(r)}</button>`).join("")}</div></article>
+      <button class="cta" id="next-week" ${anyLog ? "" : "disabled"}>다음 주 추천 받기</button>
+      <p class="note">시연용 버튼이에요. 일주일이 지난 것으로 보고, 남긴 기록을 반영해 다음 주 추천을 만들어요.${anyLog ? "" : " 먼저 하나 이상 기록을 남겨 주세요."}</p>
+      ${s.weeks.length > 1 ? `<h2 class="section-title">지난 기록</h2>${s.weeks.slice(0, -1).reverse().map(x => `<article class="card"><div class="card-head">${esc(x.label)}</div>
+        <div class="rows" style="margin-top:6px">${x.recs.map(r => `<div class="row"><span class="row-main"><strong>${esc(r.title)}</strong>${r.log?.reaction && Object.keys(r.log.reaction).length ? `<span>${esc(Object.entries(r.log.reaction).map(([k, v]) => ({ inquiries: "문의", likes: "반응", sales: "매출" }[k]) + " " + v).join(" · "))}</span>` : ""}</span>${st(r)}</div>`).join("")}</div></article>`).join("")}` : ""}
+    </section>`;
   },
-  "o-apply"() {
-    const p = P(state.sel), pick = state.pick[p.id];
-    const order = [...p.applicants].sort((a, b) => p.scores ? (p.scores[b]?.score || 0) - (p.scores[a]?.score || 0) : 0);
-    return bar("함께 할 학생을 선택하세요", "o-home") + `<section class="content">
-    <div class="pcard">${thumb(p)}<div><div class="ptitle">${esc(p.shop)}</div><div class="psub">${esc(p.title)}</div><div class="price">${won(p.pay)}</div>${metaLine(p)}</div></div>
-    <div class="sec"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h2>지원자 ${p.applicants.length}명</h2>
-      <button class="btn ai sm" id="ai-match" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? spin("분석 중") : p.scores ? "다시 분석" : "✦ AI 적합도 분석"}</button></div>
-    ${order.map(id => { const s = S(id), sc = p.scores?.[id]; return `<article class="card applicant ${pick === id ? "sel" : ""}" data-pick="${id}" tabindex="0" role="radio" aria-checked="${pick === id}">
-      <div class="radio"></div><div class="stack" style="min-width:0">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><strong>${esc(s.name)} ${p.invited === id ? '<span class="tag hot">지명한 학생</span>' : ""}</strong>${sc ? `<span class="score">${sc.score}점</span>` : ""}</div>
-      <div class="psub">${esc(s.major)} · 완료 ${s.done}건 · ${esc(s.avail)}</div>
-      <div class="psub">“${esc(id === state.me && p.pitch ? p.pitch : s.intro)}”</div>
-      <div class="pf">${s.pf.map((t, k) => `<div class="thumb" style="background:${HUES[(k + id.charCodeAt(1)) % HUES.length]}">${esc(t)}</div>`).join("")}</div>
-      ${sc ? `<div class="reason"><span class="ai-badge">✦ AI 추천 이유</span><br>${esc(sc.reason)}</div>` : ""}</div></article>`; }).join("")}
-    ${p.scoreLive === false ? '<div class="hint">AI 키가 없어 예시 규칙으로 점수를 냈어요.</div>' : ""}</div>
-    <button class="btn" id="choose" ${pick ? "" : "disabled"}>함께할 학생 선택</button>
-    <p class="notice">선택하면 매칭이 확정되고 작업 공간이 열려요.</p></section>` + tabs();
+  explore() {
+    const t = (go, ic, l) => `<button class="ex-tile" data-go="${go}">${I[ic]}<span>${l}</span></button>`;
+    return `<section class="screen"><div class="hero"><div><h1>둘러보기</h1></div></div>
+      <h2 class="section-title">우리 가게</h2>
+      <div class="explore">${t("info", "store", "가게 정보")}${t("log", "history", "홍보 기록")}${t("region", "map", "우리 동네 소식")}${t("notify", "bell", "알림 설정")}${t("plan", "card", "플랜·사용량")}${t("reset", "restart", "처음부터 다시")}</div>
+      <p class="note">같이가게는 홍보를 대신 올리지 않아요. 사장님이 확인하고 직접 올리도록 준비와 관리를 도와드려요.</p></section>`;
   },
-  "s-list"() {
-    const F = ["전체", "사진 촬영", "SNS 제작", "메뉴판", "홍보물 제작"];
-    const list = state.projects.filter(p => p.status === "open" && (!p.invited || p.invited === state.me) && (state.filter === "전체" || p.types.includes(state.filter)));
-    return bar("내가 참여할 프로젝트") + `<section class="content">
-    <div class="chips">${F.map(f => `<button class="chip" data-filter="${f}" aria-pressed="${state.filter === f}">${f}</button>`).join("")}</div>
-    <div class="stack">${list.length ? list.map(p => `<article class="card"><div class="chips"><span class="tag">${esc(p.area)}</span>${p.types.map(t => `<span class="tag">${esc(t)}</span>`).join("")}${p.invited ? `<span class="tag hot">나에게 온 지명 의뢰</span>` : p.deadline <= 3 ? `<span class="tag hot">지원 마감 D-${p.deadline}</span>` : ""}</div>
-      <div class="pcard">${thumb(p)}<div><div class="ptitle">${esc(p.shop)}</div><div class="psub">${esc(p.title)}</div><div class="price">${won(p.pay)}</div>${metaLine(p)}</div></div>
-      <button class="btn ghost" data-detail="${p.id}">${p.invited === state.me ? "지명 의뢰 확인하기" : p.applicants.includes(state.me) ? "지원 완료 · 상세 보기" : "상세 보기"}</button></article>`).join("")
-      : `<div class="empty">조건에 맞는 프로젝트가 없어요.</div>`}</div></section>` + tabs();
+  info() {
+    const p = P();
+    const row = (step, l, v) => `<button class="row" data-edit="${step}"><span class="row-main"><span>${l}</span><strong>${esc(v || "입력 안 함")}</strong></span><span class="chev">›</span></button>`;
+    return `<section class="screen"><div class="hero"><div><h1>가게 정보</h1><p>바뀐 것만 눌러서 고치세요</p></div></div>
+      <article class="card"><div class="rows">
+        ${row(0, "가게 이름", p.name)}${row(1, "업종", p.kind === "기타" ? p.kind_etc || "기타" : p.kind)}${row(2, "위치", p.region)}
+        ${row(3, "영업시간", p.hours + (p.closed.length ? ` · ${p.closed.join("·")} 휴무` : ""))}
+        ${row(4, "대표 상품", p.products.map(x => x.name + (x.price ? " " + x.price : "")).join(", "))}${row(5, "자랑", p.strengths.join(", "))}
+        ${row(6, "알리고 싶은 것", p.goals.map(g => S.goals[g]).join(", "))}${row(7, "알림", p.notify)}</div></article>
+      <button class="cta ghost" id="refresh">바뀐 정보로 이번 주 추천 다시 받기</button>
+      <p class="note">이번 주에 이미 기록을 남겼다면 바뀐 정보는 다음 주 추천에 반영돼요.</p></section>`;
   },
-  "s-detail"() {
-    const p = P(state.sel), applied = p.applicants.includes(state.me);
-    return bar("프로젝트 상세", "s-list") + `<section class="content">
-    <div class="pcard">${thumb(p)}<div><div class="ptitle">${esc(p.shop)}</div><div class="psub">${esc(p.title)}</div><div class="price">${won(p.pay)}</div>${metaLine(p)}</div></div>
-    <div class="sec"><h2>상세 정보</h2><dl class="kv">
-      <dt>작업 산출물</dt><dd><ul>${p.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></dd>
-      <dt>제공 자료</dt><dd>${esc(p.materials)}</dd>
-      <dt>수정 범위</dt><dd>통합 수정 ${p.revisions}회</dd>
-      <dt>지원 시 제출</dt><dd><ul>${p.apply.map(i => `<li>${esc(i)}</li>`).join("")}</ul></dd>
-      ${p.desc ? `<dt>사장님 한마디</dt><dd>${esc(p.desc)}</dd>` : ""}</dl></div>
-    ${applied || p.status !== "open" ? "" : `<div class="sec"><label class="label" for="pitch">지원 메시지</label><textarea class="input" id="pitch">${esc(S(state.me).intro)}</textarea></div>`}
-    <div class="stack">${p.invited === state.me && p.status === "open" ? `<div class="card invite"><strong>사장님이 나를 지명한 의뢰예요.</strong><div class="psub">사장님이 확정하면 바로 작업이 시작돼요.</div></div>` : `<button class="btn" id="apply" ${applied || p.status !== "open" ? "disabled" : ""}>${applied ? "지원 완료" : p.status !== "open" ? "모집 마감" : "지원하기"}</button>`}
-    <button class="btn ghost" id="save">${p.saved ? "관심 프로젝트에 담김" : "관심 프로젝트 담기"}</button></div></section>` + tabs();
+  region() {
+    const w = curWeek();
+    return `<section class="screen"><div class="hero"><div><h1>우리 동네 소식</h1><p>${esc(P().region || "위치 정보 없음")}</p></div></div>
+      <article class="card"><div class="strip local">${esc(w.label)} 참고 정보</div><div class="card-body">
+      ${w.ctx.map(c => `<div class="ctx"><strong>${esc(c.title)}</strong><p>${esc(c.detail)}</p><span class="src">출처: ${esc(c.source)} · 기준일 ${esc(c.date)}</span></div>`).join("")}</div></article>
+      <p class="note">지금은 시연용 예시 데이터예요. 실서비스에서는 공공데이터(상권 정보, 지역 행사 일정)를 연결하고, 출처와 기준일을 항상 함께 보여드려요.</p></section>`;
   },
-  "s-mine"() {
-    const list = state.projects.filter(p => p.applicants.includes(state.me));
-    return bar("내 지원") + `<section class="content"><div class="stack">${list.length ? list.map(p => `<article class="card"><div class="pcard">${thumb(p)}<div>
-      <div class="ptitle">${esc(p.shop)}</div><div class="psub">${esc(p.title)}</div><div class="price">${won(p.pay)}</div></div></div>
-      <span class="tag ${p.chosen === state.me ? "hot" : ""}">${p.chosen === state.me ? "선정됨" : p.chosen ? "다른 학생 선정" : "검토 중"}</span>
-      ${p.chosen === state.me ? `<button class="btn" data-progress="${p.id}">작업 공간으로</button>` : ""}</article>`).join("")
-      : `<div class="empty">아직 지원한 프로젝트가 없어요.<br>프로젝트 탭에서 마음에 드는 의뢰에 지원해 보세요.</div>`}</div></section>` + tabs();
+  plan() {
+    const cur = S.store.planInfo;
+    return `<section class="screen"><div class="hero"><div><h1>플랜·사용량</h1><p>필요한 만큼만 쓰세요</p></div></div>
+      <article class="card"><div class="strip plan">이번 달 사용량 <span>${esc(cur.name)} 플랜</span></div><div class="card-body usage">
+        <div class="rec-title" style="font-size:20px">문구 만들기 ${cur.used} / ${cur.copies}회</div><div class="usage-bar"><i style="width:${Math.min(100, cur.used / cur.copies * 100)}%"></i></div></div></article>
+      ${Object.entries(S.plans).map(([k, p]) => `<div class="plan ${k === cur.key ? "on" : ""}"><span class="example-tag">예시 가격 · 확정 전</span>
+        <div class="plan-top"><span class="plan-name">${esc(p.name)}</span><span class="plan-price">${p.price.toLocaleString("ko-KR")}원<small> / 월</small></span></div>
+        <ul>${p.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
+        ${k === cur.key ? '<span class="status done" style="align-self:flex-start">지금 쓰는 플랜</span>' : `<button class="soft-btn" data-plan="${k}">이 플랜으로 바꾸기</button>`}</div>`).join("")}
+      <p class="note">결제는 연결되지 않은 시연 화면이에요. 한도를 넘으면 추가 사용 전에 차감 기준을 먼저 알려드리고 확인을 받아요.</p></section>`;
   },
-  "profile"() {
-    const d = state.pd || (state.pd = JSON.parse(JSON.stringify(state.myProfile)));
-    const done = state.projects.filter(p => p.chosen === state.me && p.status === "done");
-    const TAGS = ["사진 촬영", "SNS 제작", "메뉴판", "홍보물 제작", "로고", "숏폼 영상", "마케팅 기획"];
-    const REG = ["경산", "대구", "영천", "청도"];
-    const regs = d.region.split(/,\s*/).filter(Boolean);
-    const AV = ["평일 방문 가능", "주말 방문 가능", "평일·주말 방문 가능", "매장 방문 어려움"];
-    return bar("내 프로필 올리기") + `<section class="content">
-    <div class="card invite">${avatar({ id: state.me, name: d.name || "나" })}<div><strong>사장님이 학생 찾기에서 보는 프로필이에요.</strong>
-      <div class="psub">작업물과 가격을 채울수록 지명 의뢰를 받기 쉬워요.</div></div></div>
-    <label class="check toggle"><input type="checkbox" id="p-open" ${d.open ? "checked" : ""}><span><strong>지금 의뢰 받기</strong><br><span class="hint">끄면 사장님에게 '의뢰 마감'으로 보여요.</span></span></label>
-
-    <div class="sec"><h2>기본 정보</h2>
-      <label class="label" for="p-name">이름</label><input class="input" id="p-name" maxlength="20" value="${esc(d.name)}">
-      <div class="row2"><div class="sec"><label class="label" for="p-school">학교</label><input class="input" id="p-school" value="${esc(d.school)}"></div>
-        <div class="sec"><label class="label" for="p-major">학과·학년</label><input class="input" id="p-major" value="${esc(d.major)}"></div></div>
-      <label class="label" for="p-headline">한 줄 소개 <span>카드 맨 위에 크게 보여요</span></label>
-      <input class="input" id="p-headline" maxlength="60" value="${esc(d.headline)}" placeholder="예) 가게의 분위기를 담는 사진과 SNS 콘텐츠"></div>
-
-    <div class="sec"><div class="label">잘하는 작업 <span>최대 5개</span></div>
-      <div class="chips">${TAGS.map(t => `<button class="chip" data-ptag="${t}" aria-pressed="${d.tags.includes(t)}">${t}</button>`).join("")}</div></div>
-    <div class="sec"><div class="label">활동 지역</div>
-      <div class="chips">${REG.map(r => `<button class="chip" data-preg="${r}" aria-pressed="${regs.includes(r)}">${r}</button>`).join("")}</div></div>
-    <div class="sec"><label class="label" for="p-avail">매장 방문 일정</label>
-      <select class="input" id="p-avail">${AV.map(a => `<option ${a === d.avail ? "selected" : ""}>${a}</option>`).join("")}${AV.includes(d.avail) ? "" : `<option selected>${esc(d.avail)}</option>`}</select></div>
-    <div class="sec"><label class="label" for="p-intro">자기소개</label>
-      <textarea class="input" id="p-intro" maxlength="600" placeholder="어떤 작업을 좋아하고, 사장님과 어떻게 일하는지 적어 주세요.">${esc(d.intro)}</textarea></div>
-
-    <div class="sec"><div class="sec-head"><h2>작업물 <span class="hint">${d.works.length}개</span></h2><span class="hint">앞의 3개가 카드에 보여요</span></div>
-      ${d.works.map((w, k) => `<div class="card wrow">
-        <label class="wimg" for="w-img-${k}">${w.img ? `<img src="${esc(w.img)}" alt="">` : "+ 사진"}</label><input type="file" id="w-img-${k}" data-wimg="${k}" accept="image/*" class="sr">
-        <div class="stack">
-          <input class="input" data-wf="title" data-k="${k}" aria-label="작업물 제목" placeholder="작업물 제목" value="${esc(w.title)}">
-          <div class="row2"><select class="input" data-wf="kind" data-k="${k}" aria-label="구분">${["작업", "수업과제", "개인 작업"].map(o => `<option ${o === w.kind ? "selected" : ""}>${o}</option>`).join("")}</select>
-            <input class="input" data-wf="tags" data-k="${k}" aria-label="분야" placeholder="분야 (예: 사진)" value="${esc(w.tags.join(", "))}"></div>
-        </div>
-        <button class="iconbtn del" data-wdel="${k}" aria-label="작업물 삭제">×</button></div>`).join("")}
-      <button class="btn ghost" id="p-addwork">+ 작업물 추가</button></div>
-
-    <div class="sec"><h2>함께할 수 있는 작업 <span class="hint">가격</span></h2>
-      ${d.services.map((v, k) => `<div class="srow"><input class="input" data-sf="name" data-k="${k}" aria-label="작업" placeholder="예) 메뉴 사진 5장" value="${esc(v.name)}">
-        <input class="input" data-sf="price" data-k="${k}" aria-label="가격" placeholder="8만원~" value="${esc(v.price)}">
-        <button class="iconbtn del" data-sdel="${k}" aria-label="삭제">×</button></div>`).join("")}
-      <button class="btn ghost" id="p-addsvc">+ 작업 추가</button></div>
-
-    <div class="stack"><button class="btn" id="p-save">프로필 저장하기</button><button class="btn ghost" id="p-preview">사장님에게 보이는 모습 미리보기</button></div>
-
-    <div class="sec"><h2>같이가게 실무 기록</h2>${done.length ? done.map(p => `<div class="card"><strong>${esc(p.shop)} · ${esc(p.title)}</strong>
-      <div class="psub">${esc(p.items.join(" + "))} · 사장님 평가 ${"★".repeat(p.rating)}${"☆".repeat(5 - p.rating)}</div>${p.review ? `<div class="psub">“${esc(p.review)}”</div>` : ""}</div>`).join("")
-      : `<div class="empty">같이가게에서 프로젝트를 완료하면 결과물과 사장님 후기가 프로필에 자동으로 쌓여요.</div>`}</div></section>` + tabs();
+  reset() {
+    return `<section class="page"><div class="page-top"><button class="icon-btn" data-go="explore" aria-label="닫기">${I.close}</button><span></span><span style="width:48px"></span></div>
+      <div class="page-body"><h1 class="q">처음부터 다시\n시작할까요?</h1><p class="q-sub">가게 정보와 지금까지의 추천·기록이 모두 지워져요.</p></div>
+      <div class="bottom-cta"><button class="cta" id="reset-yes" style="background:var(--warn);color:#fff">모두 지우고 다시 시작</button><button class="cta ghost sm" data-go="explore">취소</button></div></section>`;
   },
-  "me-view"() { return views["o-student"](); },
-  "work"() {
-    const list = state.projects.filter(p => p.chosen && (state.role === "owner" ? p.mine : p.chosen === state.me));
-    return bar("진행 작업") + `<section class="content"><div class="stack">${list.length ? list.map(p => `<article class="card"><strong>${esc(p.shop)} · ${esc(p.title)}</strong>${stepsHTML(p)}
-      <button class="btn ghost" data-progress="${p.id}">${p.status === "done" ? "완료 내역 보기" : "열기"}</button></article>`).join("")
-      : `<div class="empty">${state.role === "owner" ? "학생을 선택하면 진행 중인 작업이 여기에 나와요." : "선정된 프로젝트가 생기면 여기에서 작업해요."}</div>`}</div></section>` + tabs();
-  },
-  "progress"() {
-    const p = P(state.sel), owner = state.role === "owner", st = S(p.chosen), fb = p.feedback;
-    if (p.status === "final" || p.status === "done") return views.done();
-    return bar("프로젝트 진행 중", "work") + `<section class="content">
-    <div class="sec"><h2>프로젝트 진행 현황</h2>${stepsHTML(p)}</div>
-    <div class="card"><h2>프로젝트 조건 <span class="hint">(합의 내용)</span></h2>${termsHTML(p)}<div class="hint">담당 학생: ${esc(st.name)} · ${esc(st.major)}</div></div>
-    <div class="sec"><h2>초안 ${p.drafts.length ? `<span class="hint">${p.drafts.length}개</span>` : ""}</h2>
-      ${p.drafts.length ? `<div class="pf">${p.drafts.map(d => `<div class="thumb" style="background:${HUES[2]}">${d.img ? `<img src="${esc(d.img)}" alt="${esc(d.name)}">` : esc(d.name)}</div>`).join("")}</div>`
-        : `<div class="empty">${owner ? "학생이 초안을 올리면 여기에서 확인해요." : "작업한 초안을 올려 사장님 확인을 받으세요."}</div>`}
-      ${!owner && p.status === "matched" ? `<div class="upload"><label for="d-img">+ 초안</label><input type="file" id="d-img" accept="image/*" multiple class="sr"></div>
-        <button class="btn ghost" id="d-sample">예시 초안 3장 올리기</button>` : ""}
-      ${!owner && p.drafts.length && p.status === "matched" ? `<button class="btn" id="d-send">중간 확인 요청</button>` : ""}</div>
-    <div class="sec"><h2>피드백 <span class="hint">(사장님 → 학생)</span></h2>
-      ${owner && p.status === "review" && !fb ? `<label class="sr" for="fb-text">피드백</label><textarea class="input" id="fb-text" placeholder="예) 사진이 좀 어두워요. 딸기라떼는 위에서 찍은 것도 있으면 좋겠고 게시물 글씨는 더 크게 해주세요."></textarea>
-        <button class="btn ai" id="fb-ai" ${state.aiBusy ? "disabled" : ""}>${state.aiBusy ? spin("정리 중") : "✦ AI로 수정 요청 정리해서 보내기"}</button>` : ""}
-      ${fb ? `<div class="card"><div class="psub">사장님 원문: “${esc(fb.raw)}”</div><span class="ai-badge">✦ 수정 요청 목록 (수정 ${p.revisions}회 중 1회 사용)</span>
-        ${fb.items.map((t, k) => `<label class="check"><input type="checkbox" data-fbcheck="${k}" ${fb.done?.[k] ? "checked" : ""} ${owner ? "disabled" : ""}>${esc(t)}</label>`).join("")}
-        ${fb.outOfScope?.length ? `<div class="reason" style="background:var(--warn-soft)"><strong>합의 범위 밖 요청</strong><br>${fb.outOfScope.map(esc).join("<br>")}<br><span class="hint">추가 비용이나 별도 합의가 필요해요.</span></div>` : ""}</div>`
-        : !(owner && p.status === "review") ? `<div class="empty">${p.status === "review" ? "사장님 피드백을 기다리는 중이에요." : "중간 확인 요청 후 피드백을 받을 수 있어요."}</div>` : ""}
-      ${!owner && fb ? `<button class="btn" id="final-send">최종 결과물 제출</button>` : ""}</div>
-    </section>` + tabs();
-  },
-  "done"() {
-    const p = P(state.sel), owner = state.role === "owner", done = p.status === "done";
-    const checks = [...p.items.map(i => i + " 확인"), "수정사항 반영 확인", "오탈자 확인"];
-    const all = checks.every((_, k) => p.checks[k]);
-    return bar(done ? "프로젝트 완료" : "프로젝트 진행 완료", "work") + `<section class="content">
-    <div class="sec"><h2>프로젝트 진행 현황</h2>${stepsHTML(p)}</div>
-    <div class="card" style="background:var(--accent-soft);border-color:var(--accent)"><strong>${done ? "완료된 프로젝트예요. 결과물이 학생 포트폴리오에 등록됐어요." : owner ? "최종 제출됨 · 확인 대기" : "최종 제출 완료 · 사장님 확인 대기"}</strong></div>
-    <div class="files">${p.drafts.filter(d => d.img).map(d => `<div class="file"><span>${esc(d.name)}</span><a class="btn ghost sm" href="${esc(d.img)}" download>받기</a></div>`).join("")
-      || p.items.map(it => `<div class="file"><span>${esc(p.shop.replace(/\s/g, ""))}_${esc(it.replace(/\s/g, ""))}_최종</span><span class="hint">예시 파일</span></div>`).join("")}</div>
-    ${done ? `<div class="sec"><h2>사장님 평가</h2><div class="psub">${"★".repeat(p.rating)}${"☆".repeat(5 - p.rating)} ${p.review ? "“" + esc(p.review) + "”" : ""}</div></div>` :
-      owner ? `<div class="sec"><h2>확인 체크리스트</h2>${checks.map((c, k) => `<label class="check"><input type="checkbox" data-check="${k}" ${p.checks[k] ? "checked" : ""}>${esc(c)}</label>`).join("")}</div>
-      <div class="sec"><h2>학생 평가</h2><div class="stars" role="group" aria-label="별점">${[1, 2, 3, 4, 5].map(n => `<button data-star="${n}" class="${p.rating >= n ? "on" : ""}" aria-label="${n}점">★</button>`).join("")}</div>
-      <label class="sr" for="review">한 줄 후기</label><input class="input" id="review" placeholder="한 줄 후기 (학생 포트폴리오에 표시돼요)" value="${esc(state.reviewDraft ?? p.review ?? "")}"></div>
-      <p class="notice">약속한 결과물을 확인한 뒤 완료해 주세요. 완료하면 보수가 학생에게 지급돼요.</p>
-      <button class="btn" id="complete" ${all && p.rating ? "" : "disabled"}>완료 확인하기</button>`
-      : `<div class="empty">사장님이 체크리스트를 확인하고 완료하면 보수가 지급되고 포트폴리오에 등록돼요.</div>`}
-    </section>` + tabs();
-  }
 };
 
+const TABBED = { home: "home", log: "log", explore: "explore", info: "explore", region: "explore", plan: "explore" };
 function render() {
-  if (!state.role) state.view = "start";
-  else if (!ALLOWED[state.role].includes(state.view)) state.view = HOME[state.role];
-  app.innerHTML = views[state.view]();
-  const who = document.getElementById("who");
-  who.hidden = !state.role;
-  document.getElementById("who-label").textContent = state.role === "owner" ? "사장님" : "학생";
-  document.getElementById("reset-wrap").hidden = state.role !== "owner";
+  if (S.view === "notify") { startEdit(7); return; }
+  app.innerHTML = (V[S.view] || V.home)();
+  const tab = TABBED[S.view];
+  tabbar.hidden = !tab || !S.store;
+  if (tab) tabbar.innerHTML = [["home", "요약", "heart"], ["log", "기록", "list"], ["explore", "둘러보기", "grid"]]
+    .map(([v, l, ic]) => `<button data-go="${v}" ${tab === v ? 'aria-current="page"' : ""}>${I[ic]}${l}</button>`).join("");
+  document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.body).backgroundColor;
 }
-let tt; function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 2800); }
-function go(v) { syncProfile(); state.view = v; render(); app.querySelector(".content")?.scrollTo(0, 0); window.scrollTo(0, 0); }
-function syncProfile() {
-  const d = state.pd; if (!d || state.view !== "profile") return; const v = id => document.getElementById(id)?.value ?? "";
-  Object.assign(d, { name: v("p-name"), school: v("p-school"), major: v("p-major"), headline: v("p-headline"), avail: v("p-avail"), intro: v("p-intro"),
-    open: !!document.getElementById("p-open")?.checked });
-  app.querySelectorAll("[data-wf]").forEach(el => { const w = d.works[+el.dataset.k]; if (!w) return;
-    w[el.dataset.wf] = el.dataset.wf === "tags" ? el.value.split(",").map(x => x.trim()).filter(Boolean) : el.value; });
-  app.querySelectorAll("[data-sf]").forEach(el => { const sv = d.services[+el.dataset.k]; if (sv) sv[el.dataset.sf] = el.value; });
+function go(v) { syncOb(); S.view = v; S.tried = false; render(); window.scrollTo(0, 0); }
+function startEdit(step) {
+  const p = JSON.parse(JSON.stringify(P()));
+  if (!p.products.length) p.products = [{ name: "", price: "" }];
+  S.ob = p; S.step = step; S.edit = step; S.tried = false; S.view = "ob"; render(); window.scrollTo(0, 0);
 }
-function syncDraft() {
-  const d = state.draft; if (!d || state.view !== "o-new") return; const v = id => document.getElementById(id)?.value ?? "";
-  Object.assign(d, { text: v("ai-text"), shop: v("f-shop"), title: v("f-title"), items: [v("f-item0"), v("f-item1")], pay: v("f-pay"), days: v("f-days"), revisions: v("f-rev"), visit: v("f-visit") });
+function syncOb() {
+  if (S.view !== "ob" || !S.ob) return;
+  app.querySelectorAll("[data-ob]").forEach(el => S.ob[el.dataset.ob] = el.value);
+  app.querySelectorAll("[data-prod]").forEach(el => S.ob.products[+el.dataset.i][el.dataset.prod] = el.value);
+}
+function syncCopy() { app.querySelectorAll("[data-cf]").forEach(el => S.copyF[el.dataset.cf] = el.value); const t = document.getElementById("cp-text"); if (t) S.copyText = t.value; }
+function syncLog() { app.querySelectorAll("[data-react]").forEach(el => S.log.reaction[el.dataset.react] = el.value); }
+function openCopy(id) {
+  const { w, r } = findRec(id), p = P(), c = w.copies[id];
+  const prod = p.products[0] || { name: "", price: "" };
+  S.copyF = c ? { ...c.fields } : { name: p.name, product: prod.name, price: prod.price, period: "", condition: "" };
+  S.copyText = null; S.sel = id; go("copy");
+}
+function openLog(id) {
+  const { r } = findRec(id);
+  S.log = r.log ? { done: r.log.done, reason: r.log.reason, reaction: { ...(r.log.reaction || {}) } } : { done: null, reason: null, reaction: {} };
+  S.sel = id; go("logrec");
 }
 
 /* ---------- 이벤트 ---------- */
-document.getElementById("logout").onclick = async () => {
-  await api("/api/logout", {});
-  Object.assign(state, { role: null, view: "start", projects: [], students: {}, bookmarks: [], draft: null, pd: null, pick: {}, sel: null, stu: null });
-  render(); window.scrollTo(0, 0);
-};
-document.getElementById("reset").onclick = async () => {
-  if (!confirm("모든 의뢰와 진행 내역을 지우고 예시 데이터로 되돌릴까요?")) return;
-  await api("/api/reset", {}); state.draft = null; state.pd = null; state.pick = {}; await boot(); go(HOME[state.role]); toast("예시 데이터로 초기화했어요.");
-};
-
-async function guarded(fn) { try { await fn(); } catch (e) { state.aiBusy = false; render(); toast(e.message); } }
-
-app.addEventListener("click", e => {
-  const b = e.target.closest("button,[data-pick]"); if (!b) return;
-  const ds = b.dataset;
-  if (ds.role) return guarded(async () => { await api("/api/role", { role: ds.role }); state.view = HOME[ds.role]; await boot(); window.scrollTo(0, 0); });
-  if (ds.go) { syncDraft(); return go(ds.go); }
-  if (ds.apply) { state.sel = ds.apply; return go("o-apply"); }
-  if (ds.progress) { state.sel = ds.progress; return go("progress"); }
-  if (ds.detail) { state.sel = ds.detail; return go("s-detail"); }
-  if (ds.filter) { state.filter = ds.filter; return render(); }
-  if (ds.type) { syncDraft(); const d = state.draft; d.types = d.types.includes(ds.type) ? d.types.filter(t => t !== ds.type) : [...d.types, ds.type]; return render(); }
-  if (ds.pick) { state.pick[state.sel] = ds.pick; return render(); }
-  if (ds.stu) { state.stu = ds.stu; state.pfTab = "포트폴리오"; return go("o-student"); }
-  if (ds.pftab) { state.pfTab = ds.pftab; return render(); }
-  if (ds.invite) { const s = S(ds.invite); state.draft = { shop: "카페 온담", text: "", title: "", types: s.tags.filter(t => ["사진 촬영", "SNS 제작", "메뉴판", "홍보물 제작", "로고"].includes(t)).slice(0, 2), items: ["", ""], pay: "", days: "", revisions: "", visit: "", refImgs: [], materials: "", apply: [], tips: null, live: null, invite: s.id }; return go("o-new"); }
-  if (ds.bm) return guarded(async () => { state.bookmarks = (await api("/api/bookmarks/toggle", { id: ds.bm })).bookmarks; toast(marked(ds.bm) ? "찜한 학생에 담았어요." : "찜을 해제했어요."); if (state.view === "o-find") { document.getElementById("find-list").innerHTML = findList(); } else render(); });
-  if (ds.ptag) { syncProfile(); const d = state.pd; d.tags = d.tags.includes(ds.ptag) ? d.tags.filter(t => t !== ds.ptag) : d.tags.length >= 5 ? (toast("잘하는 작업은 5개까지 고를 수 있어요."), d.tags) : [...d.tags, ds.ptag]; return render(); }
-  if (ds.preg) { syncProfile(); const d = state.pd; let r = d.region.split(/,\s*/).filter(Boolean); r = r.includes(ds.preg) ? r.filter(x => x !== ds.preg) : [...r, ds.preg]; d.region = r.join(", "); return render(); }
-  if (ds.wdel) { syncProfile(); state.pd.works.splice(+ds.wdel, 1); return render(); }
-  if (ds.sdel) { syncProfile(); state.pd.services.splice(+ds.sdel, 1); return render(); }
-  if (b.id === "p-addwork") { syncProfile(); state.pd.works.push({ title: "", kind: "작업", tags: [], img: null }); render(); app.querySelector(`[data-wf="title"][data-k="${state.pd.works.length - 1}"]`)?.focus(); return; }
-  if (b.id === "p-addsvc") { syncProfile(); state.pd.services.push({ name: "", price: "" }); return render(); }
-  if (b.id === "p-preview" || b.id === "p-save") return guarded(async () => {
-    syncProfile();
-    const r = await api("/api/profile", state.pd);
-    state.students = r.students; state.myProfile = r.myProfile; state.pd = JSON.parse(JSON.stringify(r.myProfile));
-    if (b.id === "p-preview") { state.pfTab = "포트폴리오"; go("me-view"); toast("저장하고 미리보기를 열었어요."); }
-    else { render(); toast("프로필을 저장했어요. 사장님 학생 찾기에 바로 보여요."); }
-  });
-  if (b.id === "find-saved") { state.find.saved = !state.find.saved; return render(); }
-  if (ds.star) return guarded(async () => { await act(state.sel, "rate", { n: +ds.star, review: state.reviewDraft ?? "" }); render(); });
-  const p = P(state.sel);
-  guarded(async () => {
-    switch (b.id) {
-      case "ai-fill": {
-        syncDraft(); const d = state.draft;
-        if (d.text.trim().length < 5) return toast("필요한 작업을 한두 문장으로 적어 주세요.");
-        state.aiBusy = true; render();
-        const { data, live } = await api("/api/ai/brief", { text: d.text, shop: d.shop });
-        state.aiBusy = false;
-        const items = data.items || [];
-        Object.assign(d, { title: data.title || d.title, types: (data.types || []).filter(Boolean), items: [...items, "", ""].slice(0, Math.max(2, items.length)),
-          pay: data.pay ?? "", days: data.days ?? "", revisions: data.revisions ?? "", visit: data.visit ?? "", materials: data.materials || "", apply: data.apply || [], tips: data.tips || [], live });
-        render(); toast(live ? "AI가 의뢰서를 채웠어요. 내용을 확인하고 고쳐 주세요." : "예시 규칙으로 채웠어요."); break;
-      }
-      case "f-submit": {
-        syncDraft();
-        const np = await api("/api/projects", state.draft);
-        upd(np); const wasInvite = state.draft.invite; state.draft = null;
-        toast(wasInvite ? "지명 의뢰를 보냈어요. 내 의뢰에서 확정할 수 있어요." : "의뢰를 올렸어요. 학생 화면에서 바로 보여요."); return go("o-home");
-      }
-      case "ai-match": {
-        state.aiBusy = true; render();
-        upd(await api(`/api/projects/${p.id}/match`, {})); state.aiBusy = false; return render();
-      }
-      case "choose": {
-        await act(p.id, "choose", { student: state.pick[p.id] }); toast(S(state.pick[p.id]).name + " 학생과 매칭됐어요."); return go("progress");
-      }
-      case "apply": { await act(p.id, "apply", { pitch: document.getElementById("pitch")?.value || "" }); toast("지원했어요. 사장님 화면에서 지원자로 보여요."); return render(); }
-      case "save": { await act(p.id, "save"); return render(); }
-      case "d-sample": { await act(p.id, "add_drafts", { drafts: [{ name: "메뉴 사진 A" }, { name: "메뉴 사진 B" }, { name: "게시물 시안" }] }); return render(); }
-      case "d-send": { await act(p.id, "request_review"); toast("중간 확인을 요청했어요."); return render(); }
-      case "fb-ai": {
-        const raw = document.getElementById("fb-text").value.trim();
-        if (raw.length < 4) return toast("피드백을 적어 주세요.");
-        state.aiBusy = true; render();
-        await act(p.id, "feedback", { raw }); state.aiBusy = false; toast("수정 요청을 학생에게 보냈어요."); return render();
-      }
-      case "final-send": { await act(p.id, "final"); toast("최종 결과물을 제출했어요."); return render(); }
-      case "complete": { await act(p.id, "complete", { review: state.reviewDraft ?? p.review ?? "" }); state.reviewDraft = undefined; state.students = (await api("/api/bootstrap")).students; toast("완료됐어요. 보수가 지급되고 포트폴리오에 등록됐어요."); return render(); }
+document.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const d = b.dataset;
+  if (d.go) { if (d.go === "notify") return startEdit(7); S.edit = null; return go(d.go); }
+  if (d.rec) { S.sel = d.rec; return go("rec"); }
+  if (d.copy) return openCopy(d.copy);
+  if (d.log) return openLog(d.log);
+  if (d.edit) return startEdit(+d.edit);
+  if (d.demo) return run("예시 가게의 이번 주 홍보를 찾고 있어요", async () => { S.store = (await api("/api/demo", { kind: d.demo })).store; S.demoPick = false; go("home"); });
+  if (d.plan) return run("", async () => { S.store = (await api("/api/plan", { plan: d.plan })).store; render(); toast(`${S.plans[d.plan].name} 플랜으로 바꿨어요.`); });
+  // 질문 단계
+  if (S.view === "ob") {
+    syncOb(); const o = S.ob;
+    if (d.kind) { o.kind = d.kind; if (o.kind !== "기타") o.kind_etc = ""; return render(); }
+    if (d.closed) { o.closed = o.closed.includes(d.closed) ? o.closed.filter(x => x !== d.closed) : [...o.closed, d.closed]; return render(); }
+    if (d.delprod) { o.products.splice(+d.delprod, 1); return render(); }
+    if (d.str) { o.strengths = o.strengths.includes(d.str) ? o.strengths.filter(x => x !== d.str) : [...o.strengths, d.str].slice(0, 5); return render(); }
+    if (d.goal) { o.goals = o.goals.includes(d.goal) ? o.goals.filter(x => x !== d.goal) : o.goals.length >= 3 ? (toast("3개까지 고를 수 있어요."), o.goals) : [...o.goals, d.goal]; return render(); }
+    if (d.notify) { o.notify = d.notify; return render(); }
+    if (b.id === "add-prod") { o.products.push({ name: "", price: "" }); render(); document.getElementById(`pn${o.products.length - 1}`)?.focus(); return; }
+    if (b.id === "add-str") { const v = document.getElementById("ob-str").value.trim(); if (v && !o.strengths.includes(v)) o.strengths = [...o.strengths, v].slice(0, 5); return render(); }
+    if (b.id === "ob-back") {
+      if (S.edit !== null) { S.edit = null; return go("info"); }
+      if (S.step === 0) return go(S.store ? "home" : "welcome");
+      S.step--; S.tried = false; return render();
     }
-  });
+    if (b.id === "ob-next") {
+      const st = STEPS[S.step];
+      if (!st.ok(o)) { S.tried = true; return render(); }
+      S.tried = false;
+      if (S.edit !== null) return run("저장하고 있어요", async () => { S.store = (await api("/api/profile", o, "PUT")).store; S.edit = null; go("info"); toast("저장했어요."); });
+      if (S.step < STEPS.length - 1) { S.step++; render(); window.scrollTo(0, 0); return; }
+      return run("우리 가게에 맞는 홍보를\n찾고 있어요", async () => { S.store = (await api("/api/onboard", o)).store; S.ob = null; go("home"); });
+    }
+    return;
+  }
+  if (b.id === "start") { S.ob = newOb(); S.step = 0; S.edit = null; return go("ob"); }
+  if (b.id === "demo-pick") { S.demoPick = !S.demoPick; return render(); }
+  if (b.id === "cp-make") { syncCopy(); return run("홍보 문구를 쓰고 있어요", async () => { const r = await api("/api/copy", { rec: S.sel, fields: S.copyF }); S.store = r.store; S.copyText = null; render(); }); }
+  if (b.id === "cp-copy") {
+    syncCopy(); const { w } = findRec(S.sel); const c = w.copies[S.sel];
+    const text = (S.copyText ?? c.text) + "\n\n" + (c.hashtags || []).join(" ");
+    navigator.clipboard?.writeText(text).then(() => toast("복사했어요. 인스타그램에 붙여 넣으세요."), () => { document.getElementById("cp-text").select(); toast("문구를 길게 눌러 복사해 주세요."); });
+    return;
+  }
+  if (S.view === "logrec") {
+    syncLog();
+    if (d.done !== undefined) { S.log.done = d.done === "1"; if (S.log.done) S.log.reason = null; return render(); }
+    if (d.reason) { S.log.reason = d.reason; return render(); }
+    if (b.id === "lr-save") return run("", async () => { S.store = (await api("/api/log", { rec: S.sel, ...S.log })).store; go("log"); toast("기록했어요. 다음 주 추천에 반영돼요."); });
+  }
+  if (b.id === "next-week") return run("기록을 보고\n다음 주 홍보를 고르고 있어요", async () => { S.store = (await api("/api/next-week", {})).store; go("home"); });
+  if (b.id === "refresh") return run("바뀐 정보로 추천을\n다시 찾고 있어요", async () => { S.store = (await api("/api/refresh", {})).store; go("home"); });
+  if (b.id === "reset-yes") return run("", async () => { await api("/api/reset", {}); S.store = null; go("welcome"); });
 });
-
-app.addEventListener("change", e => {
-  const t = e.target;
-  guarded(async () => {
-    if (t.dataset.wimg !== undefined) { syncProfile(); const [u] = await uploadFiles(t.files); if (u) state.pd.works[+t.dataset.wimg].img = u.url; render(); return; }
-    if (t.id === "f-img") { syncDraft(); const ups = await uploadFiles(t.files); state.draft.refImgs.push(...ups.map(u => u.url)); render(); }
-    if (t.id === "d-img") { const ups = await uploadFiles(t.files); await act(state.sel, "add_drafts", { drafts: ups.map(u => ({ name: u.name, img: u.url })) }); render(); }
-    if (["find-type", "find-region", "find-day"].includes(t.id)) { state.find[t.id.slice(5)] = t.value; document.getElementById("find-list").innerHTML = findList(); return; }
-    if (t.dataset.check !== undefined) { await act(state.sel, "check", { k: t.dataset.check, v: t.checked }); render(); }
-    if (t.dataset.fbcheck !== undefined) { await act(state.sel, "fbcheck", { k: t.dataset.fbcheck, v: t.checked }); }
-  });
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && S.view === "ob" && e.target.tagName === "INPUT") {
+    e.preventDefault();
+    if (e.target.id === "ob-str") return document.getElementById("add-str")?.click();
+    document.getElementById("ob-next")?.click();
+  }
 });
-app.addEventListener("input", e => {
-  if (e.target.id === "review") state.reviewDraft = e.target.value;
-  if (e.target.id === "find-q") { state.find.q = e.target.value; document.getElementById("find-list").innerHTML = findList(); }
-});
-app.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.dataset?.pick) { e.preventDefault(); e.target.click(); } });
+document.addEventListener("input", e => { if (S.view === "ob" && S.tried && e.target.dataset.ob === "name") { syncOb(); } });
 
 boot();

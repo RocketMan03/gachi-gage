@@ -2,5 +2,3 @@
 __pycache__/
 .env
 data/
-uploads/*
-!uploads/.gitkeep

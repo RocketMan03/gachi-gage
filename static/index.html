@@ -3,18 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>같이가게 MVP</title>
+<meta name="theme-color" content="#ffffff">
+<title>같이가게</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="top">
-  <div class="brand">같이가게<small>대학생 × 소상공인 실무 프로젝트 · MVP</small></div>
-  <div class="who" id="who" hidden><span class="who-role" id="who-label"></span><button id="logout">나가기</button></div>
-</div>
-<main class="app" id="app"><p class="notice" style="padding:40px">불러오는 중…</p></main>
-<p class="foot"><span id="ai-state"></span><span id="reset-wrap" hidden> · <button id="reset">예시 데이터로 초기화</button></span></p>
+<main class="app" id="app"><p class="loading-text">불러오는 중…</p></main>
+<nav class="tabbar" id="tabbar" hidden></nav>
+<div class="busy" id="busy" hidden><div class="busy-card"><span class="spin"></span><p id="busy-text">잠시만요</p></div></div>
 <div class="toast" id="toast" hidden></div>
 <script src="/static/app.js"></script>
 </body>
