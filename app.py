@@ -1,7 +1,10 @@
-"""같이가게 MVP 서버 (Flask)
+"""같이가게 MVP 서버 (Flask) — 우리 가게를 이해하는 마케팅 AI
 
 실행:  python app.py   →  브라우저에서 http://127.0.0.1:5000
+방문자마다 브라우저 쿠키로 가게 하나가 따로 저장된다(로그인 없음).
 """
+import copy as _copy
+import datetime as dt
 import os
 import secrets
 import socket
@@ -17,22 +20,26 @@ except ImportError:
 
 import ai
 import db
+import region
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-UPLOADS = os.path.join(BASE, "uploads")
-ALLOWED = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024  # 업로드 1건 최대 8MB
-os.makedirs(UPLOADS, exist_ok=True)
-db.init()
+
+# 플랜 (가격·한도는 팀 논의의 예시이며 확정 전)
+PLANS = {
+    "lite": {"name": "라이트", "price": 4900, "copies": 10, "features": ["월 4회 홍보 추천", "홍보 문구 월 10회", "실행 기록"]},
+    "basic": {"name": "기본", "price": 9900, "copies": 30, "features": ["매주 홍보 추천과 알림", "홍보 문구 월 30회", "실행 기록 분석"]},
+    "plus": {"name": "플러스", "price": 29000, "copies": 100, "features": ["기본 플랜의 모든 기능", "홍보 문구 월 100회", "리뷰·인사이트 캡처 분석(예정)", "여러 매장 관리(예정)"]},
+}
+GOALS = {"new": "신메뉴·새 상품 알리기", "quiet": "손님 적은 시간대 채우기", "regular": "단골 손님 늘리기",
+         "open": "오픈·리뉴얼 알리기", "event": "행사·할인 알리기"}
 
 
 def _secret_key():
-    """역할 쿠키 서명용 키. 환경변수가 없으면 data/secret.key 에 만들어 둔다."""
     if os.getenv("SECRET_KEY"):
         return os.getenv("SECRET_KEY")
     path = os.path.join(BASE, "data", "secret.key")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         with open(path, "w") as f:
             f.write(secrets.token_hex(32))
@@ -41,45 +48,98 @@ def _secret_key():
 
 
 app.secret_key = _secret_key()
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
-ROLES = ("owner", "student")
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  PERMANENT_SESSION_LIFETIME=dt.timedelta(days=60))
 
 
-def _role():
-    return session.get("role")
+def _sid():
+    if "sid" not in session:
+        session["sid"] = uuid.uuid4().hex
+        session.permanent = True
+    return session["sid"]
 
 
-def _need(role):
-    """선택한 역할이 아니면 막는다. 학생은 사장님 기능을, 사장님은 학생 기능을 쓸 수 없다."""
-    if _role() != role:
-        abort(403, "사장님 전용 기능이에요." if role == "owner" else "학생 전용 기능이에요.")
+def _store_or_404():
+    s = db.get(_sid())
+    if not s:
+        abort(404, "먼저 가게를 등록해 주세요.")
+    return s
 
 
-def _student_can_see(p):
-    return (p["status"] == "open" and p.get("invited") in (None, db.ME)) or db.ME in p["applicants"] or p.get("chosen") == db.ME
+def _week_date(s, week):
+    return dt.date.fromisoformat(s["start"]) + dt.timedelta(days=7 * (week - 1))
 
 
-def _for_student(p):
-    """학생에게 보낼 때는 다른 지원자 정보와 AI 점수를 뺀다."""
-    p = dict(p)
-    p["applicants"] = [a for a in p["applicants"] if a == db.ME]
-    for k in ("scores", "scoreLive", "pitch", "saved_by_owner"):
-        p.pop(k, None)
+def _week_label(d):
+    first = d.replace(day=1)
+    n = (d.day + first.weekday() - 1) // 7 + 1
+    return f"{d.month}월 {n}주차"
+
+
+def _txt(v, n):
+    return str(v or "").strip()[:n]
+
+
+def _clean_profile(d):
+    prods = [{"name": _txt(x.get("name"), 30), "price": _txt(x.get("price"), 20)}
+             for x in (d.get("products") or []) if _txt(x.get("name"), 30)][:5]
+    p = {
+        "name": _txt(d.get("name"), 30), "kind": _txt(d.get("kind"), 15) or "기타",
+        "kind_etc": _txt(d.get("kind_etc"), 20), "region": _txt(d.get("region"), 60),
+        "hours": _txt(d.get("hours"), 40), "closed": [_txt(x, 5) for x in (d.get("closed") or [])][:7],
+        "products": prods, "strengths": [_txt(x, 30) for x in (d.get("strengths") or []) if _txt(x, 30)][:5],
+        "goals": [g for g in (d.get("goals") or []) if g in GOALS][:3], "goal_text": _txt(d.get("goal_text"), 80),
+        "notify": _txt(d.get("notify"), 20) or "매주 월요일 오전",
+    }
+    if not p["name"]:
+        abort(400, "가게 이름을 다시 확인해 주세요.")
     return p
 
 
-def _num(v, default=0):
-    try:
-        return int(str(v).replace(",", "").strip() or default)
-    except ValueError:
-        return default
+def _profile_for_ai(p):
+    q = dict(p)
+    if p["kind"] == "기타" and p.get("kind_etc"):
+        q["kind_detail"] = p["kind_etc"]
+    q["goals"] = [GOALS[g] for g in p.get("goals", [])]
+    q["goal_keys"] = p.get("goals", [])
+    return q
 
 
-def _project_or_404(pid):
-    p = db.get(pid)
-    if not p:
-        abort(404, "프로젝트를 찾을 수 없어요.")
-    return p
+def _make_week(s, week):
+    d = _week_date(s, week)
+    ctx = region.context(s["profile"], d)
+    p = _profile_for_ai(s["profile"])
+    p["goals"] = p.pop("goal_keys")  # 규칙 기반은 키, AI 프롬프트는 아래에서 설명을 함께 본다
+    p["goal_names"] = [GOALS[g] for g in p["goals"]]
+    data, live = ai.recommend(p, ctx, s["weeks"], week)
+    recs = []
+    for i, x in enumerate(data["items"]):
+        x = dict(x)
+        x["id"] = f"w{week}r{i}"
+        x["log"] = None
+        recs.append(x)
+    return {"week": week, "label": _week_label(d), "date": d.isoformat(), "headline": data.get("headline", ""),
+            "adjust": data.get("adjust", ""), "live": live, "ctx": ctx, "recs": recs, "copies": {}}
+
+
+def _new_store(p, demo=False):
+    s = {"profile": p, "start": dt.date.today().isoformat(), "plan": "basic", "usage": {"copies": 0}, "weeks": [], "demo": demo}
+    s["weeks"].append(_make_week(s, 1))
+    return db.save(_sid(), s)
+
+
+def _public(s):
+    s = _copy.deepcopy(s)
+    s["planInfo"] = {"key": s["plan"], **PLANS[s["plan"]], "used": s["usage"]["copies"]}
+    return s
+
+
+@app.after_request
+def no_cache(resp):
+    """화면 파일을 브라우저가 오래 저장하지 않게 해서, 코드를 바꾸면 바로 새 화면이 보이게 한다."""
+    if request.path == "/" or request.path.startswith("/static/") or request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
 
 
 # ---------- 화면 ----------
@@ -88,212 +148,133 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
-@app.get("/uploads/<path:name>")
-def uploaded(name):
-    return send_from_directory(UPLOADS, name)
-
-
 # ---------- API ----------
-@app.post("/api/role")
-def choose_role():
-    role = request.get_json(force=True).get("role")
-    if role not in ROLES:
-        abort(400, "사장님 또는 학생 중에서 골라 주세요.")
-    session.clear()
-    session["role"] = role
-    return jsonify(role=role)
+@app.get("/api/state")
+def state():
+    s = db.get(_sid())
+    return jsonify(store=_public(s) if s else None, aiLive=ai.enabled(), plans=PLANS, goals=GOALS)
 
 
-@app.post("/api/logout")
-def logout():
-    session.clear()
-    return jsonify(role=None)
+@app.post("/api/onboard")
+def onboard():
+    return jsonify(store=_public(_new_store(_clean_profile(request.get_json(force=True)))))
 
 
-@app.get("/api/bootstrap")
-def bootstrap():
-    role = _role()
-    if role not in ROLES:
-        return jsonify(role=None)
-    projects = db.all_projects()
-    students = db.students_view(projects)
-    if role == "owner":
-        return jsonify(role=role, projects=[p for p in projects if p.get("mine")], students=students, me=None,
-                       aiLive=ai.enabled(), bookmarks=db.get_meta("bookmarks", []))
-    return jsonify(role=role, projects=[_for_student(p) for p in projects if _student_can_see(p)],
-                   students={db.ME: students[db.ME]}, me=db.ME, aiLive=ai.enabled(), myProfile=db.my_profile())
+SAMPLES = {
+    "PC방": {"name": "레벨업 PC방", "kind": "PC방", "region": "경산시 대학로 (영남대 정문 인근)", "hours": "24시간",
+            "products": [{"name": "새 게이밍 좌석", "price": "시간당 1,500원"}, {"name": "야간 정액권", "price": "8,000원"}],
+            "strengths": ["새로 바꾼 좌석", "넓은 단체석"], "goals": ["new", "quiet"], "goal_text": "새로 바꾼 좌석을 알리고 싶어요"},
+    "카페": {"name": "카페 온담", "kind": "카페", "region": "경산시 대학로 (영남대 정문 인근)", "hours": "10:00 ~ 22:00", "closed": ["월"],
+           "products": [{"name": "딸기 라떼", "price": "5,500원"}, {"name": "아메리카노", "price": "3,000원"}],
+           "strengths": ["창가 자리 햇살", "직접 만든 디저트"], "goals": ["new", "regular"], "goal_text": "겨울 신메뉴를 알리고 싶어요",
+           "notify": "매주 금요일 오후"},
+    "미용실": {"name": "헤어 살롱 결", "kind": "미용실", "region": "경산시 사동", "hours": "10:00 ~ 20:00", "closed": ["화"],
+            "products": [{"name": "남성 커트", "price": "15,000원"}, {"name": "뿌리 염색", "price": "40,000원"}],
+            "strengths": ["1:1 예약제", "꼼꼼한 상담"], "goals": ["quiet", "regular"], "goal_text": "평일 오후 예약이 비어요"},
+}
 
 
-def _text(v, n):
-    return str(v or "").strip()[:n]
+@app.post("/api/demo")
+def demo():
+    """예시 가게로 바로 둘러보기 (발표 시연용)."""
+    kind = request.get_json(force=True).get("kind", "PC방")
+    return jsonify(store=_public(_new_store(_clean_profile(SAMPLES.get(kind, SAMPLES["PC방"])), demo=True)))
 
 
-@app.post("/api/profile")
-def save_profile():
-    """학생이 자기 프로필을 올리거나 고친다."""
-    _need("student")
+@app.put("/api/profile")
+def update_profile():
+    s = _store_or_404()
+    s["profile"] = _clean_profile(request.get_json(force=True))
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
+@app.post("/api/refresh")
+def refresh():
+    """가게 정보를 바꾼 뒤 이번 주 추천을 다시 받는다 (아직 기록이 없을 때만)."""
+    s = _store_or_404()
+    cur = s["weeks"][-1]
+    if any(r.get("log") for r in cur["recs"]):
+        abort(400, "이미 기록을 남긴 주차라 추천을 바꿀 수 없어요. 바뀐 정보는 다음 주 추천에 반영돼요.")
+    s["weeks"][-1] = _make_week({**s, "weeks": s["weeks"][:-1]}, cur["week"])
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
+def _find_rec(s, rid):
+    for w in s["weeks"]:
+        for r in w["recs"]:
+            if r["id"] == rid:
+                return w, r
+    abort(404, "추천을 찾을 수 없어요.")
+
+
+@app.post("/api/copy")
+def make_copy():
+    s = _store_or_404()
     d = request.get_json(force=True)
-    if not _text(d.get("name"), 20) or not _text(d.get("headline"), 60):
-        abort(400, "이름과 한 줄 소개를 채워 주세요.")
-    if not d.get("tags"):
-        abort(400, "잘하는 작업을 하나 이상 골라 주세요.")
-    works = [{"title": _text(w.get("title"), 40), "kind": _text(w.get("kind"), 10) or "작업",
-              "tags": [_text(t, 10) for t in (w.get("tags") or []) if _text(t, 10)][:3], "img": w.get("img") or None}
-             for w in (d.get("works") or []) if _text(w.get("title"), 40)][:12]
-    services = [{"name": _text(v.get("name"), 30), "price": _text(v.get("price"), 15)}
-                for v in (d.get("services") or []) if _text(v.get("name"), 30)][:6]
-    db.save_my_profile({
-        "name": _text(d["name"], 20), "school": _text(d.get("school"), 30), "major": _text(d.get("major"), 30),
-        "headline": _text(d["headline"], 60), "tags": [_text(t, 10) for t in d["tags"]][:5],
-        "region": _text(d.get("region"), 30) or "경산", "avail": _text(d.get("avail"), 30),
-        "intro": _text(d.get("intro"), 600), "open": bool(d.get("open")), "works": works, "services": services,
-    })
-    me = db.students_view(db.all_projects())[db.ME]
-    return jsonify(students={db.ME: me}, myProfile=db.my_profile())
+    w, r = _find_rec(s, d.get("rec"))
+    plan = PLANS[s["plan"]]
+    if s["usage"]["copies"] >= plan["copies"]:
+        abort(403, f"이번 달 문구 만들기 {plan['copies']}회를 모두 썼어요. 플랜에서 한도를 늘릴 수 있어요.")
+    fields = {k: _txt((d.get("fields") or {}).get(k), 60) for k in ("name", "product", "price", "period", "condition")}
+    data, live = ai.copy(_profile_for_ai(s["profile"]), r, fields)
+    s["usage"]["copies"] += 1
+    w["copies"][r["id"]] = {"fields": fields, **data, "live": live}
+    db.save(_sid(), s)
+    return jsonify(store=_public(s), copy=w["copies"][r["id"]])
 
 
-@app.post("/api/bookmarks/toggle")
-def toggle_bookmark():
-    _need("owner")
-    sid = request.get_json(force=True).get("id")
-    if sid not in db.STUDENTS:
-        abort(404, "학생을 찾을 수 없어요.")
-    marks = db.get_meta("bookmarks", [])
-    marks = [m for m in marks if m != sid] if sid in marks else marks + [sid]
-    return jsonify(bookmarks=db.set_meta("bookmarks", marks))
+@app.post("/api/log")
+def log():
+    s = _store_or_404()
+    d = request.get_json(force=True)
+    w, r = _find_rec(s, d.get("rec"))
+    done = bool(d.get("done"))
+    reason = None if done else d.get("reason")
+    if not done and reason not in ai.REASONS:
+        abort(400, "못 한 이유를 골라 주세요.")
+    react = d.get("reaction") or {}
+    r["log"] = {"done": done, "reason": reason, "at": dt.datetime.now().isoformat(timespec="minutes"),
+                "reaction": {k: _txt(react.get(k), 12) for k in ("inquiries", "likes", "sales") if _txt(react.get(k), 12)}}
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
+@app.post("/api/next-week")
+def next_week():
+    """시연용: 일주일이 지난 것으로 보고, 기록을 반영한 다음 주 추천을 만든다."""
+    s = _store_or_404()
+    cur = s["weeks"][-1]
+    if not any(r.get("log") for r in cur["recs"]):
+        abort(400, "이번 주 추천 중 하나 이상 기록을 남겨 주세요. 기록이 다음 추천에 반영돼요.")
+    s["weeks"].append(_make_week(s, cur["week"] + 1))
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
+@app.post("/api/plan")
+def set_plan():
+    s = _store_or_404()
+    plan = request.get_json(force=True).get("plan")
+    if plan not in PLANS:
+        abort(400, "플랜을 다시 골라 주세요.")
+    s["plan"] = plan
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
 
 
 @app.post("/api/reset")
 def reset():
-    _need("owner")
-    db.reset()
-    return jsonify(ok=True)
-
-
-@app.post("/api/upload")
-def upload():
-    if _role() not in ROLES:
-        abort(403, "먼저 사장님 또는 학생으로 시작해 주세요.")
-    f = request.files.get("file")
-    if not f or not f.filename:
-        abort(400, "파일이 없어요.")
-    ext = os.path.splitext(f.filename)[1].lower()
-    if ext not in ALLOWED:
-        abort(400, "이미지 파일(png, jpg, gif, webp)만 올릴 수 있어요.")
-    name = uuid.uuid4().hex + ext
-    f.save(os.path.join(UPLOADS, name))
-    return jsonify(url="/uploads/" + name, name=f.filename)
-
-
-@app.post("/api/ai/brief")
-def ai_brief():
-    _need("owner")
-    body = request.get_json(force=True)
-    data, live = ai.brief(body.get("text", ""), body.get("shop", "우리 가게"))
-    return jsonify(data=data, live=live)
-
-
-@app.post("/api/projects")
-def create_project():
-    _need("owner")
-    d = request.get_json(force=True)
-    if not d.get("title") or not d.get("types") or not _num(d.get("pay")):
-        abort(400, "작업 종류, 제목, 보수를 채워 주세요.")
-    p = db._base(
-        id="p" + uuid.uuid4().hex[:8], mine=True, shop=d.get("shop") or "카페 온담", title=d["title"][:60],
-        types=d["types"], items=[i for i in d.get("items", []) if i], pay=_num(d["pay"]),
-        days=_num(d.get("days"), 7) or 7, revisions=_num(d.get("revisions"), 1) or 1, visit=_num(d.get("visit")),
-        area="영남대 정문 인근", materials=d.get("materials") or "로고, 메뉴 정보", desc=d.get("text", ""),
-        apply=d.get("apply") or ["포트폴리오"], refImgs=d.get("refImgs", [])[:10], hue=5,
-    )
-    invite = d.get("invite")
-    if invite in db.STUDENTS:  # 학생 포트폴리오에서 바로 보낸 지명 의뢰
-        p["invited"] = invite
-        p["applicants"] = [invite]
-    return jsonify(db.save(p, new=True))
-
-
-@app.post("/api/projects/<pid>/match")
-def match(pid):
-    _need("owner")
-    p = _project_or_404(pid)
-    p["scores"], p["scoreLive"] = ai.match(p, db.students_view(db.all_projects()))
-    return jsonify(db.save(p))
-
-
-@app.post("/api/projects/<pid>/action")
-def action(pid):
-    """프로젝트 상태를 바꾸는 모든 동작을 한 곳에서 처리한다."""
-    p = _project_or_404(pid)
-    body = request.get_json(force=True)
-    t, a = body.get("type"), body.get("payload") or {}
-    owner_actions = {"choose", "feedback", "check", "rate", "complete"}
-    student_actions = {"apply", "save", "add_drafts", "request_review", "fbcheck", "final"}
-    if t in owner_actions:
-        _need("owner")
-        if not p.get("mine"):
-            abort(403, "내 의뢰만 관리할 수 있어요.")
-    elif t in student_actions:
-        _need("student")
-        if t in ("apply", "save"):
-            if not _student_can_see(p):
-                abort(403, "지원할 수 없는 의뢰예요.")
-        elif p.get("chosen") != db.ME:
-            abort(403, "내가 맡은 프로젝트만 작업할 수 있어요.")
-
-    if t == "apply":                                   # 학생: 지원
-        if db.ME not in p["applicants"] and p["status"] == "open":
-            p["applicants"].append(db.ME)
-            p["pitch"] = a.get("pitch", "")
-    elif t == "save":                                  # 학생: 관심 담기
-        p["saved"] = not p.get("saved")
-    elif t == "choose":                                # 사장님: 학생 선택
-        if a.get("student") not in p["applicants"]:
-            abort(400, "지원자 중에서 골라 주세요.")
-        p["chosen"], p["status"] = a["student"], "matched"
-    elif t == "add_drafts":                            # 학생: 초안 업로드
-        p["drafts"] += a.get("drafts", [])[:10]
-    elif t == "request_review":                        # 학생: 중간 확인 요청
-        if not p["drafts"]:
-            abort(400, "초안을 먼저 올려 주세요.")
-        p["status"] = "review"
-    elif t == "feedback":                              # 사장님: 피드백 → AI 정리
-        raw = (a.get("raw") or "").strip()
-        if len(raw) < 4:
-            abort(400, "피드백을 적어 주세요.")
-        data, live = ai.feedback(raw, p)
-        p["feedback"] = {"raw": raw, "items": data.get("items", []), "outOfScope": data.get("outOfScope", []),
-                         "done": {}, "live": live}
-    elif t == "fbcheck":                               # 학생: 수정 항목 체크
-        if p.get("feedback"):
-            p["feedback"]["done"][str(a.get("k"))] = bool(a.get("v"))
-    elif t == "final":                                 # 학생: 최종 제출
-        p["status"] = "final"
-    elif t == "check":                                 # 사장님: 체크리스트
-        p["checks"][str(a.get("k"))] = bool(a.get("v"))
-    elif t == "rate":
-        p["rating"] = max(1, min(5, _num(a.get("n"), 5)))
-        p["review"] = a.get("review", p.get("review", ""))[:200]
-    elif t == "complete":                              # 사장님: 완료 확인
-        if not p["rating"]:
-            abort(400, "별점을 먼저 남겨 주세요.")
-        p["review"] = a.get("review", p.get("review", ""))[:200]
-        p["status"] = "done"
-    else:
-        abort(400, "알 수 없는 동작이에요.")
-    saved = db.save(p)
-    return jsonify(saved if _role() == "owner" else _for_student(saved))
+    db.delete(_sid())
+    return jsonify(store=None)
 
 
 @app.errorhandler(400)
 @app.errorhandler(403)
 @app.errorhandler(404)
-@app.errorhandler(413)
 def err(e):
-    msg = getattr(e, "description", "") or "요청을 처리하지 못했어요."
-    if getattr(e, "code", 0) == 413:
-        msg = "파일이 너무 커요. 8MB 이하로 올려 주세요."
-    return jsonify(error=msg), getattr(e, "code", 400)
+    return jsonify(error=getattr(e, "description", "") or "요청을 처리하지 못했어요."), getattr(e, "code", 400)
 
 
 def _lan_ip():
