@@ -134,6 +134,14 @@ def _public(s):
     return s
 
 
+@app.after_request
+def no_cache(resp):
+    """화면 파일을 브라우저가 오래 저장하지 않게 해서, 코드를 바꾸면 바로 새 화면이 보이게 한다."""
+    if request.path == "/" or request.path.startswith("/static/") or request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 # ---------- 화면 ----------
 @app.get("/")
 def index():
