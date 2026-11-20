@@ -341,3 +341,16 @@ button.fb-row:hover { border-color: var(--main); }
 .act { padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
 .act:first-child { border-top: 0; }
 .act-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--sub); }
+
+/* ---------- 같이가게 캐릭터 ---------- */
+.robot { display: block; width: 160px; height: 160px; object-fit: contain; margin: 0 auto; }
+.robot.splash { width: 200px; height: 200px; margin-bottom: 8px; }
+.robot.md { width: 96px; height: 96px; margin-bottom: 6px; }
+.robot.sm { width: 64px; height: 64px; margin: 0; flex: none; }
+.brand-robot { width: 30px; height: 30px; object-fit: contain; vertical-align: -8px; margin-right: 4px; }
+.ob-splash .ob-logo { text-align: center; }
+.ob-hello { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; }
+.ob-hello .bubble { background: var(--soft); color: var(--main); border-radius: 14px 14px 14px 4px; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+.ob-center .robot { width: 180px; height: 180px; margin-top: 24px; }
+.cheer { text-align: center; }
+.empty .robot { margin-bottom: 0; }

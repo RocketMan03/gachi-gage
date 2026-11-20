@@ -59,7 +59,7 @@ function toast(msg) {
 }
 
 function loading(msg, steps) {
-  $app.innerHTML = `<div class="loading"><div class="spinner"></div><div id="loadMsg">${esc(msg)}</div>${steps ? `<ul class="steps">${steps.map((s, i) => `<li data-step="${i}">${esc(s)}</li>`).join('')}</ul>` : ''}</div>`;
+  $app.innerHTML = `<div class="loading">${robot('guide', 'robot md')}<div class="spinner"></div><div id="loadMsg">${esc(msg)}</div>${steps ? `<ul class="steps">${steps.map((s, i) => `<li data-step="${i}">${esc(s)}</li>`).join('')}</ul>` : ''}</div>`;
 }
 function stepDone(i) {
   const li = document.querySelector(`[data-step="${i}"]`);
@@ -340,7 +340,7 @@ async function renderPosts() {
           <div class="pubs">${pubIcons(p)}</div>
         </div>
       </article>`;
-    }).join('') : `<div class="card empty">${posts.length ? '이 조건의 게시물이 없어요.' : '아직 만든 게시물이 없어요.<br>위의 <b>새 게시물 만들기</b>를 눌러 첫 게시물을 만들어 보세요!'}</div>`}`;
+    }).join('') : `<div class="card empty">${robot('think', 'robot md')}<br>${posts.length ? '이 조건의 게시물이 없어요.' : '아직 만든 게시물이 없어요.<br>위의 <b>새 게시물 만들기</b>를 눌러 첫 게시물을 만들어 보세요!'}</div>`}`;
 }
 
 // ---------- 반응 (인스타·페이스북·스레드): 좋아요·답글 수 + 답글 내용 ----------
@@ -1003,7 +1003,7 @@ async function publishNow() {
     const okNames = results.filter((r) => r.ok).map((r) => r.name);
     const fails = results.filter((r) => !r.ok);
     if (fails.length) alertBox(`${okNames.length ? `✅ ${okNames.join(', ')} 게시 완료\n\n` : ''}❌ 올리지 못한 곳\n${fails.map((f) => `· ${f.name}: ${f.error}`).join('\n')}`);
-    else toast(`🎉 ${okNames.join(', ')}에 올렸어요!`);
+    else modal(`<div class="cheer">${robot('cheer', 'robot md')}<div class="fact-title" style="margin:6px 0 4px">${esc(okNames.join(', '))}에 올렸어요!</div><p class="hint">반응 탭에서 좋아요와 답글을 볼 수 있어요.</p></div><div class="row"><button class="btn primary" data-m="close">확인</button></div>`);
   } catch (err) {
     toast(err.message);
     renderPostView();
@@ -1283,20 +1283,10 @@ $app.addEventListener('click', async (e) => {
   await renderChannels();
 });
 
-// ---------- 첫 실행 온보딩 (Figma 디자인) ----------
-// 이미지가 없으면 emoji로 대신 보여줘요: public/img/manager-<id>.png
-const MANAGERS = [
-  { id: 'duri', name: '두리', emoji: '🤖', bg: '#a9b9f2', ink: '#1a3fa5' },
-  { id: 'moa', name: '모아', emoji: '🐰', bg: '#c7b2f4', ink: '#4b1d8f' },
-  { id: 'tori', name: '토리', emoji: '🍳', bg: '#ffb18e', ink: '#7a2e05' },
-  { id: 'tantan', name: '탄탄', emoji: '🌱', bg: '#a6de98', ink: '#2c4a15' },
-];
-const MANAGER_QUOTE = '“사장님! 어려운건 저와 같이 해봐요.”';
-const ob = { step: 0, mgr: 0, data: { ownerName: '', manager: 'duri', category: '', name: '', address: '', weeklyPromo: true } };
-
-function mgrImg(m, cls = '') {
-  return `<img class="${cls}" src="/img/manager-${m.id}.png" alt="${esc(m.name)}" onerror="this.outerHTML='<div class=&quot;mgr-emoji&quot;>${m.emoji}</div>'" />`;
-}
+// ---------- 첫 실행 온보딩 ----------
+// 같이가게 캐릭터(로봇) 하나로 통일. 포즈: hello, guide, think, cheer, shy, bell
+const robot = (pose, cls = 'robot') => `<img class="${cls}" src="/img/robot-${pose}.png" alt="" aria-hidden="true" />`;
+const ob = { step: 0, data: { ownerName: '', manager: 'duri', category: '', name: '', address: '', weeklyPromo: true } };
 
 function obScreen(body, foot, { back = true } = {}) {
   return `<div class="ob">
@@ -1310,22 +1300,10 @@ function renderOnboarding() {
   const d = ob.data;
   const next = (label = '다음') => `<button type="button" class="btn primary" data-ob="next">${label}</button>`;
   const steps = [
-    () => `<div class="ob ob-splash" data-ob="next"><div class="ob-logo">🏪 같이가게</div></div>`,
-    () => obScreen(`<h1>사장님의<br>이름을 입력해주세요</h1>
+    () => `<div class="ob ob-splash" data-ob="next">${robot('hello', 'robot splash')}<div class="ob-logo">같이가게</div></div>`,
+    () => obScreen(`<div class="ob-hello">${robot('hello', 'robot sm')}<div class="bubble">안녕하세요! 홍보, 저와 같이 해봐요.</div></div>
+      <h1>사장님의<br>이름을 입력해주세요</h1>
       <label>이름</label><input data-field="ownerName" value="${esc(d.ownerName)}" autocomplete="name" />`, next(), { back: false }),
-    () => {
-      const m = MANAGERS[ob.mgr];
-      return obScreen(`<h1>당신과 함께할<br>매니저를 골라주세요</h1>
-        <div class="mgr-card" style="--mgr-bg:${m.bg};--mgr-ink:${m.ink}">
-          <div class="mgr-dots">${MANAGERS.map((_, i) => `<i class="${i === ob.mgr ? 'on' : ''}"></i>`).join('')}</div>
-          ${mgrImg(m)}
-          <h2>${esc(m.name)}</h2><p>${MANAGER_QUOTE}</p>
-          <button type="button" class="mgr-nav prev" data-ob="mgr-prev" aria-label="이전 매니저">‹</button>
-          <button type="button" class="mgr-nav next" data-ob="mgr-next" aria-label="다음 매니저">›</button>
-        </div>
-        <p class="mgr-note">추후 설정에서 매니저 변경 할 수 있어요</p>`,
-        `<button type="button" class="btn mgr" style="--mgr-ink:${m.ink}" data-ob="pick-mgr">선택하기</button>`);
-    },
     () => obScreen(`<h1>어떤 업종을 하고 계신가요?</h1>
       <label>업종</label><input data-field="category" list="obCategories" value="${esc(d.category)}" placeholder="골라주세요 또는 직접 입력" />
       <datalist id="obCategories">${CATEGORY_EXAMPLES.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`, next()),
@@ -1333,8 +1311,7 @@ function renderOnboarding() {
       <label>가게 이름</label><input data-field="name" value="${esc(d.name)}" />
       <label>가게 주소</label><input data-field="address" value="${esc(d.address)}" placeholder="동네 이름까지 · 해시태그에 쓰여요" />`, next()),
     () => {
-      const m = MANAGERS.find((x) => x.id === d.manager) || MANAGERS[0];
-      return obScreen(`<div class="ob-center">${mgrImg(m)}
+      return obScreen(`<div class="ob-center">${robot('bell')}
         <h1>매주, 가게 홍보를 챙겨드릴까요?</h1>
         <p>사장님 상황에 맞는 홍보를 일주일에 한 번 알려드릴게요.</p></div>`,
         `<button type="button" class="btn soft" data-ob="finish-skip">건너뛰기</button>
@@ -1346,16 +1323,13 @@ function renderOnboarding() {
   if (ob.step === 0) setTimeout(() => { if (ob.step === 0 && !state.storeId) { ob.step = 1; renderOnboarding(); } }, 1200);
 }
 
-const OB_REQUIRED = { 1: [['ownerName', '이름']], 3: [['category', '업종']], 4: [['name', '가게 이름'], ['address', '가게 주소']] };
+const OB_REQUIRED = { 1: [['ownerName', '이름']], 2: [['category', '업종']], 3: [['name', '가게 이름'], ['address', '가게 주소']] };
 
 async function onboardingClick(e) {
   const act = e.target.closest('[data-ob]')?.dataset.ob;
   if (!act) return;
   $app.querySelectorAll('[data-field]').forEach((i) => (ob.data[i.dataset.field] = i.value.trim()));
   if (act === 'back') ob.step = Math.max(1, ob.step - 1);
-  if (act === 'mgr-prev') ob.mgr = (ob.mgr + MANAGERS.length - 1) % MANAGERS.length;
-  if (act === 'mgr-next') ob.mgr = (ob.mgr + 1) % MANAGERS.length;
-  if (act === 'pick-mgr') { ob.data.manager = MANAGERS[ob.mgr].id; ob.step++; }
   if (act === 'next') {
     const miss = (OB_REQUIRED[ob.step] || []).find(([k]) => !ob.data[k]);
     if (miss) return toast(`${miss[1]}을(를) 입력해 주세요.`);
@@ -1391,7 +1365,7 @@ function renderAuth() {
   const signup = authMode === 'signup';
   $app.innerHTML = `
     <div class="auth">
-      <div class="ob-logo" style="text-align:center;margin:12px 0 4px">🏪 같이가게</div>
+      ${robot('hello', 'robot md')}<div class="ob-logo" style="text-align:center;margin:0 0 4px">같이가게</div>
       <p class="lead" style="text-align:center">${signup ? '아이디를 만들면 어느 기기에서든 내 가게를 이어서 쓸 수 있어요.' : '로그인하고 우리 가게 홍보를 이어서 해요.'}</p>
       <form id="authForm" class="card" autocomplete="on">
         <label style="margin-top:0">아이디</label>
