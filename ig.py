@@ -1,7 +1,11 @@
 """인스타그램 바로 올리기 (Meta 공식 API: Instagram API with Instagram Login)
 
 필요한 환경변수 (Render → Environment)
-  INSTAGRAM_TOKEN        'IG'로 시작하는 액세스 토큰 (없으면 이 기능은 꺼지고 복사 방식으로 작동)
+  INSTAGRAM_TOKEN        액세스 토큰 (없으면 이 기능은 꺼지고 복사 방식으로 작동)
+                         - 'IG'로 시작: 인스타그램 로그인 방식 → graph.instagram.com
+                         - 'EAA'로 시작: 페이스북 로그인 방식 → graph.facebook.com
+                           (인스타 계정이 페이스북 페이지에 연결돼 있어야 함)
+  INSTAGRAM_USER_ID      (선택) 인스타 비즈니스 계정 ID. 'EAA' 토큰에서 자동으로 못 찾을 때 직접 넣는다.
   INSTAGRAM_PUBLISH_PIN  (권장) 올리기 전에 입력할 숫자. 공개 사이트에서 아무나 우리 계정에 올리지 못하게 막는다.
   PUBLIC_BASE_URL        (선택) 사진을 Meta가 가져갈 공개 주소. Render는 RENDER_EXTERNAL_URL을 자동으로 쓴다.
 
@@ -22,7 +26,14 @@ MEDIA_DIR = os.path.join(BASE, "data", "media")
 _me_cache = {"at": 0, "data": None}
 
 
+def fb_login():
+    """'EAA'로 시작하면 페이스북 로그인 방식 토큰."""
+    return token().startswith("EAA")
+
+
 def _host():
+    if fb_login():
+        return os.getenv("FB_GRAPH_HOST", "https://graph.facebook.com")
     return os.getenv("IG_GRAPH_HOST", "https://graph.instagram.com")
 
 
@@ -89,9 +100,28 @@ def me():
         return None
     if _me_cache["data"] and time.time() - _me_cache["at"] < 600:
         return _me_cache["data"]
-    d = _call("GET", "me", {"fields": "user_id,username"})
-    _me_cache.update(at=time.time(), data={"id": d.get("user_id") or d.get("id"), "username": d.get("username", "")})
-    return _me_cache["data"]
+    if fb_login():
+        data = _fb_ig_account()
+    else:
+        d = _call("GET", "me", {"fields": "user_id,username"})
+        data = {"id": d.get("user_id") or d.get("id"), "username": d.get("username", "")}
+    _me_cache.update(at=time.time(), data=data)
+    return data
+
+
+def _fb_ig_account():
+    """페이스북 로그인 토큰: 페이지에 연결된 인스타 비즈니스 계정을 찾는다."""
+    uid = (os.getenv("INSTAGRAM_USER_ID") or "").strip()
+    if uid:
+        d = _call("GET", uid, {"fields": "username"})
+        return {"id": uid, "username": d.get("username", "")}
+    pages = _call("GET", "me/accounts", {"fields": "name,instagram_business_account{id,username}"}).get("data", [])
+    for pg in pages:
+        acc = pg.get("instagram_business_account")
+        if acc and acc.get("id"):
+            return {"id": acc["id"], "username": acc.get("username", "")}
+    raise IGError("이 토큰으로는 인스타 계정을 찾지 못했어요. 인스타 계정을 페이스북 페이지에 연결하고, 토큰을 만들 때 그 페이지와 instagram_basic, "
+                  "instagram_content_publish, pages_show_list 권한을 허용해 주세요. (또는 INSTAGRAM_USER_ID를 직접 넣어 주세요)")
 
 
 def status():
