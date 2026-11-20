@@ -38,12 +38,15 @@ const POST_SYSTEM = `너는 마케팅 담당자가 없는 소상공인 사장님
    - facebook: 4~8줄, 정보 위주, 위치·영업 정보 포함, 해시태그 0~3개
    - threads: 2~4줄, 대화하듯 짧게, 전체 450자 이내, 해시태그는 최대 1개
 5. headline은 홍보 카드 이미지에 크게 들어갈 제목(공백 포함 14자 이내), subline은 그 아래 작은 글(24자 이내).
-6. imagePrompt는 AI 이미지 생성 모델에 줄 영어 프롬프트. 글자(텍스트)가 들어가지 않는 사진풍 장면으로 묘사한다.
+6. tag는 카드 위쪽 작은 카테고리 태그(공백 포함 10자 이내, 예: "맛집 추천", "신메뉴 소개").
+7. [카드 스타일]에 맞춰 headline·subline의 말투와 내용을 정한다.
+8. imagePrompt는 AI 이미지 생성 모델에 줄 영어 프롬프트. 글자(텍스트)가 들어가지 않는 사진풍 장면으로 묘사한다.
 
 반드시 아래 JSON 형식으로만 답한다.
 {
   "headline": "카드 큰 제목",
   "subline": "카드 작은 글",
+  "tag": "카테고리 태그",
   "captions": {
     "instagram": "인스타그램 문구 전체 (해시태그 포함, 줄바꿈은 \\n)",
     "facebook": "페이스북 문구 전체",
@@ -53,6 +56,17 @@ const POST_SYSTEM = `너는 마케팅 담당자가 없는 소상공인 사장님
   "imagePrompt": "English prompt for an image model"
 }`;
 
+// 홍보 카드 스타일별 문구 요령 (참고: 인스타 '피드 사꾸' 스타일)
+const STYLE_GUIDE = {
+  magazine: '매거진 표지형. headline은 친구에게 말 걸듯 짧은 구어체 2줄 이내(예: "우리도 여기 갈래?", "다 알려주겠어!"). 클릭하고 싶게.',
+  shapes: '굵은 문구 + 포인트 도형. headline은 굵게 보일 짧은 한 구절, subline은 상황 설명 한마디.',
+  doodle: '손그림 드로잉. headline은 귀엽고 가벼운 구어체, subline은 사진 속 장면을 한 줄로.',
+  sparkle: '반짝이 하이라이트. headline은 사진 속 상품을 콕 집어 자랑하는 구어체, subline은 특징 한 줄.',
+  sticker: '스티커 콜라주. subline은 말풍선에 들어갈 감탄 한마디(예: "이거 진짜 맛있어!"), headline은 짧은 제목.',
+  slide: '옆으로 넘기는 슬라이드 피드. headline은 이어지는 이야기의 시작, subline은 다음 장이 궁금하게.',
+  bottom: '기본 카드. headline은 상품·혜택을 바로 알 수 있게, subline은 가격·기간 등 정보.',
+};
+
 function buildPostPrompt(store, input, refCount, pastPosts) {
   return {
     system: POST_SYSTEM,
@@ -61,6 +75,7 @@ function buildPostPrompt(store, input, refCount, pastPosts) {
       `[이번에 홍보할 것]\n${input.topic}`,
       `[강조하고 싶은 내용]\n${input.detail || '(없음)'}`,
       `[원하는 분위기]\n${input.tone || '친근하게'}`,
+      `[카드 스타일]\n${STYLE_GUIDE[input.style] || STYLE_GUIDE.bottom}`,
       `[참고 사진]\n${refCount ? `${refCount}장 첨부 (아래 이미지)` : '없음'}`,
       `[최근 게시물]\n${pastPostsText(pastPosts)}`,
       '위 내용으로 게시물을 만들어 주세요. 최근 게시물과 문구가 너무 비슷하지 않게 해 주세요.',

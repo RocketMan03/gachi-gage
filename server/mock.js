@@ -42,6 +42,7 @@ function mockPost(store, input) {
   return {
     headline: (p?.name || input.topic).slice(0, 14),
     subline: (event ? '이번 주 [혜택 내용]' : p?.price ? price : name).slice(0, 24),
+    tag: `${store.category || '우리 동네'} 추천`.slice(0, 12),
     captions: { instagram, facebook, threads },
     checklist: ['[대괄호] 빈칸을 실제 내용으로 바꾸기', '가격·기간이 정확한지 확인하기'],
     imagePrompt: `A warm, inviting photo for a small local ${store.category} shop, featuring ${input.topic}, natural light, Korean neighborhood, no text`,

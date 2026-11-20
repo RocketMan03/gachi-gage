@@ -192,6 +192,7 @@ function normalizePost(raw, fallback) {
   return {
     headline: str(raw?.headline, fallback.headline).slice(0, 20),
     subline: str(raw?.subline, fallback.subline).slice(0, 30),
+    tag: str(raw?.tag, fallback.tag).slice(0, 12),
     captions: {
       instagram: str(c.instagram, fallback.captions.instagram).slice(0, 2200),
       facebook: str(c.facebook, fallback.captions.facebook),

@@ -272,3 +272,15 @@ textarea.cap { min-height: 220px; line-height: 1.7; }
 .mgr-nav.next { right: 10px; }
 .mgr-note { text-align: center; color: var(--sub); font-size: 11px; margin: 14px 0 0; }
 .btn.mgr { background: var(--mgr-ink); color: #fff; }
+
+/* 새 게시물: 스타일 고르기 */
+.style-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.style-opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; min-width: 0;
+  border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 10px 12px;
+}
+.style-opt strong { font-size: 13px; }
+.style-opt .hint { line-height: 1.4; }
+.style-ic { font-size: 20px; line-height: 1; }
+.style-opt:hover { background: var(--sunk); }
+.style-opt.on { border-color: var(--main); background: var(--soft); box-shadow: 0 0 0 1px var(--main); }

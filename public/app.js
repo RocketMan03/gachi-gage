@@ -12,7 +12,7 @@ const state = {
   connections: {},
   capTab: 'instagram',
   filter: 'all',
-  newDraft: { topic: '', detail: '', tone: '친근하게', files: [] }, // 새 게시물 입력 중인 내용
+  newDraft: { topic: '', detail: '', tone: '친근하게', style: 'magazine', files: [] }, // 새 게시물 입력 중인 내용
 };
 
 const PLATFORMS = [
@@ -326,6 +326,9 @@ function renderNew() {
       <label>분위기</label>
       <div class="chips" id="toneChips">${tones.map((t) => `<button class="chip ${d.tone === t ? 'on' : ''}" data-tone="${esc(t)}">${esc(t)}</button>`).join('')}</div>
 
+      <label>스타일 <span class="hint">(홍보 카드에 들어갈 편집 효과 · 사진이 있어야 적용돼요)</span></label>
+      <div class="style-grid" id="styleChips">${Imaging.STYLES.map((st) => `<button type="button" class="style-opt ${d.style === st.id ? 'on' : ''}" data-style="${st.id}" aria-pressed="${d.style === st.id}"><span class="style-ic">${st.icon}</span><strong>${esc(st.name)}</strong><span class="hint">${esc(st.desc)}</span></button>`).join('')}</div>
+
       <label>참고 사진 <span class="hint">(선택 · 최대 10장 · AI가 사진을 보고 문구를 써요)</span></label>
       <div class="thumbs" id="refThumbs">${d.files.map((f, i) => `<div class="thumb"><img src="${URL.createObjectURL(f)}" alt="" /><button class="thumb-del" data-del-ref="${i}" aria-label="삭제">×</button></div>`).join('')}</div>
       <div class="row">
@@ -351,7 +354,7 @@ async function createPost() {
   loading('AI가 게시물을 만들고 있어요…', steps);
   document.querySelector('[data-step="0"]')?.classList.add('now');
   try {
-    let post = await api('POST', `/api/stores/${state.storeId}/posts`, { topic: d.topic, detail: d.detail, tone: d.tone });
+    let post = await api('POST', `/api/stores/${state.storeId}/posts`, { topic: d.topic, detail: d.detail, tone: d.tone, style: d.style });
     stepDone(0);
     for (const f of d.files) {
       const c = await Imaging.fitInsta(f);
@@ -364,21 +367,19 @@ async function createPost() {
     const enhancedBlobs = [];
     for (const r of refs) enhancedBlobs.push({ ref: r, blob: await Imaging.toJpeg(await Imaging.enhance(imgUrl(r), 'auto')) });
     stepDone(3);
-    // 표지: 홍보 카드 → 그다음 보정 사진들
-    const card = await Imaging.makeCard({
-      photo: enhancedBlobs[0]?.blob || null,
-      headline: post.headline || d.topic,
-      subline: post.subline,
-      storeName: state.store.name,
-      template: enhancedBlobs.length ? 'bottom' : 'text',
-    });
-    post = await uploadImage(post.id, await Imaging.toJpeg(card), { kind: 'card', source: enhancedBlobs[0]?.ref.id, label: enhancedBlobs.length ? 'bottom' : 'text', select: true });
+    // 표지: 고른 스타일의 홍보 카드(슬라이드는 2장) → 그다음 보정 사진들
+    const cardText = { headline: post.headline || d.topic, subline: post.subline, tag: post.tag, storeName: state.store.name, category: state.store.category };
+    const tpl = !enhancedBlobs.length ? 'text' : d.style === 'slide' ? 'slide' : (Imaging.TEMPLATES[d.style] ? d.style : 'bottom');
+    const cards = tpl === 'slide'
+      ? await Imaging.makeSlides({ photos: enhancedBlobs.map((e) => e.blob), ...cardText })
+      : [await Imaging.makeCard({ photo: enhancedBlobs[0]?.blob || null, template: tpl, ...cardText })];
+    for (const card of cards) post = await uploadImage(post.id, await Imaging.toJpeg(card), { kind: 'card', source: enhancedBlobs[0]?.ref.id, label: tpl, select: true });
     for (const e of enhancedBlobs) post = await uploadImage(post.id, e.blob, { kind: 'enhanced', source: e.ref.id, label: 'auto', select: true });
     stepDone(4);
     // 연결된 플랫폼을 기본으로 체크
     const pfs = PLATFORMS.filter((p) => state.connections[p.id]?.connected).map((p) => p.id);
     post = await api('PUT', `/api/posts/${post.id}`, { platforms: pfs });
-    state.newDraft = { topic: '', detail: '', tone: d.tone, files: [] };
+    state.newDraft = { topic: '', detail: '', tone: d.tone, style: d.style, files: [] };
     setView('post', { postId: post.id, post, capTab: 'instagram' });
   } catch (err) {
     toast(err.message);
@@ -582,7 +583,7 @@ function openTools(imgId) {
 async function openCardMaker(photoImg, template) {
   const post = state.post;
   const photo = photoImg || selectedImages(post).find((i) => i.kind !== 'card') || post.images.find((i) => i.kind !== 'card');
-  let tpl = template || (photo ? 'bottom' : 'text');
+  let tpl = template || (!photo ? 'text' : Imaging.TEMPLATES[post.style] ? post.style : 'bottom');
   const m = modal(`
     <div class="fact-title" style="margin-top:0">🎨 홍보 카드 만들기</div>
     <canvas id="cardCanvas" class="tool-preview"></canvas>
@@ -619,6 +620,8 @@ async function openCardMaker(photoImg, template) {
     headline: m.el.querySelector('#cardHead').value,
     subline: m.el.querySelector('#cardSub').value,
     storeName: state.store?.name || '',
+    category: state.store?.category || '',
+    tag: post.tag || '',
     template: tpl,
     color,
   });
@@ -708,6 +711,11 @@ $app.addEventListener('click', async (e) => {
       state.newDraft.topic = el.dataset.topic;
       document.getElementById('topic').value = el.dataset.topic;
       document.querySelectorAll('[data-topic]').forEach((c) => c.classList.toggle('on', c === el));
+      return;
+    }
+    if ((el = t('[data-style]'))) {
+      state.newDraft.style = el.dataset.style;
+      document.querySelectorAll('[data-style]').forEach((c) => { c.classList.toggle('on', c === el); c.setAttribute('aria-pressed', c === el); });
       return;
     }
     if ((el = t('[data-tone]'))) {
