@@ -156,7 +156,8 @@ def index():
 @app.get("/api/state")
 def state():
     s = db.get(_sid())
-    return jsonify(store=_public(s) if s else None, aiLive=ai.enabled(), plans=PLANS, goals=GOALS, ig=ig.status())
+    removed = _sync_posts(s) if s else []
+    return jsonify(store=_public(s) if s else None, aiLive=ai.enabled(), plans=PLANS, goals=GOALS, ig=ig.status(), removed=removed)
 
 
 @app.post("/api/onboard")
@@ -275,6 +276,45 @@ def ig_publish():
     return jsonify(store=_public(s), post=w["posts"][r["id"]])
 
 
+SYNC_EVERY = 30  # 같은 게시물은 30초에 한 번만 인스타그램에 확인
+
+
+def _mark_deleted(w, rid, by):
+    post = w["posts"].pop(rid)
+    w.setdefault("deleted", []).append({**post, "rec": rid, "by": by, "deletedAt": dt.datetime.now().isoformat(timespec="minutes")})
+
+
+def _sync_posts(s, rid=None, force=False):
+    """인스타그램 앱에서 직접 지운 게시물을 찾아 '올렸어요' 상태에서 뺀다. 뺀 홍보 제목 목록을 돌려준다."""
+    if not ig.enabled():
+        return []
+    now, removed, changed = dt.datetime.now().timestamp(), [], False
+    for w in s.get("weeks", []):
+        for r_id, post in list((w.get("posts") or {}).items()):
+            if rid and r_id != rid:
+                continue
+            if not force and now - post.get("checkedAt", 0) < SYNC_EVERY:
+                continue
+            ok = ig.exists(post.get("id"))
+            if ok is False:
+                _mark_deleted(w, r_id, "instagram")
+                removed.append(next((r["title"] for r in w["recs"] if r["id"] == r_id), "홍보"))
+            elif ok is True:
+                post["checkedAt"] = now
+            changed = True
+    if changed:
+        db.save(_sid(), s)
+    return removed
+
+
+@app.post("/api/instagram/sync")
+def ig_sync():
+    s = _store_or_404()
+    d = request.get_json(silent=True) or {}
+    removed = _sync_posts(s, d.get("rec"), force=bool(d.get("force")))
+    return jsonify(store=_public(s), removed=removed)
+
+
 @app.post("/api/instagram/delete")
 def ig_delete():
     s = _store_or_404()
@@ -285,12 +325,14 @@ def ig_delete():
     post = (w.get("posts") or {}).get(r["id"])
     if not post:
         abort(400, "이 홍보로 올린 인스타그램 게시물이 없어요.")
+    by = "app"
     try:
         ig.delete(post["id"])
     except ig.IGError as e:
-        abort(400, str(e))
-    w.setdefault("deleted", []).append({**post, "rec": r["id"], "deletedAt": dt.datetime.now().isoformat(timespec="minutes")})
-    del w["posts"][r["id"]]  # 다시 올릴 수 있게
+        if not (ig.gone(e) or ig.exists(post["id"]) is False):
+            abort(400, str(e))
+        by = "instagram"  # 이미 인스타그램에서 지워져 있었음
+    _mark_deleted(w, r["id"], by)  # 다시 올릴 수 있게
     db.save(_sid(), s)
     return jsonify(store=_public(s))
 

@@ -83,8 +83,35 @@ async function boot() {
     const d = await api("/api/state");
     Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals, ig: d.ig || { enabled: false } });
     if (d.store) { S.view = "home"; render(); } else startOnboarding();
+    igRemoved(d.removed);
   } catch (e) { app.innerHTML = `<p class="loading-text">${esc(e.message)}</p>`; }
 }
+
+/* ---------- 인스타그램 앱에서 지운 게시물 반영 ---------- */
+function igRemoved(list) {
+  if (!list || !list.length) return;
+  toast(`인스타그램에서 지운 '${list[0]}'${list.length > 1 ? ` 외 ${list.length - 1}개` : ""} 게시물을 목록에서 뺐어요`);
+}
+let igSyncing = false;
+async function igSync(rec, force) {
+  if (!S.ig?.enabled || !S.store || igSyncing) return;
+  if (!S.store.weeks.some(w => Object.keys(w.posts || {}).length)) return;  // 올린 게시물이 없으면 확인할 것도 없음
+  igSyncing = true;
+  try {
+    const d = await api("/api/instagram/sync", { rec, force });
+    if (d.removed?.length) {
+      S.store = d.store; igRemoved(d.removed);
+      if (S.view === "igdel") S.view = "copy";
+      if (["copy", "home", "log", "igdel"].includes(S.view)) { syncCopy(); render(); }
+    }
+  } catch (e) { /* 확인 실패는 조용히 넘어간다 */ } finally { igSyncing = false; }
+}
+// 인스타그램 앱에서 지우고 돌아오면 바로 확인
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  const onPost = ["copy", "igdel"].includes(S.view) && (findRec(S.sel).w?.posts || {})[S.sel];
+  igSync(onPost ? S.sel : undefined, !!onPost);
+});
 
 /* ---------- 상태 도우미 ---------- */
 const P = () => S.store.profile;
@@ -152,7 +179,8 @@ const STEPS = [
 function igBlock(w, r) {
   const photo = (w.photos || {})[r.id], post = (w.posts || {})[r.id];
   if (post) return `<div class="ig-done"><strong>인스타그램에 올렸어요</strong>${post.url ? `<a href="${esc(post.url)}" target="_blank" rel="noopener">게시물 보기 ›</a>` : ""}</div>
-    ${S.ig?.canDelete ? `<button class="link-btn" id="ig-del-go" style="align-self:flex-start;color:var(--warn)">인스타그램에서 삭제하기</button>` : ""}`;
+    ${S.ig?.canDelete ? `<button class="link-btn" id="ig-del-go" style="align-self:flex-start;color:var(--warn)">인스타그램에서 삭제하기</button>` : ""}
+    <p class="note" style="padding:0">인스타그램 앱에서 지워도 여기에 자동으로 반영돼요.</p>`;
   return `<div class="ig-box"><div class="field-label">올릴 사진</div>
     <div class="ig-photo">${photo ? `<img src="/media/${esc(photo)}" alt="올릴 사진">` : "<span>사진을 골라 주세요</span>"}</div>
     <label class="soft-btn" for="ph-file" style="align-self:flex-start;cursor:pointer">${photo ? "사진 바꾸기" : "사진 고르기"}</label>
@@ -381,6 +409,7 @@ function openCopy(id) {
   const prod = p.products[0] || { name: "", price: "" };
   S.copyF = c ? { ...c.fields } : { name: p.name, product: prod.name, price: prod.price, period: "", condition: "" };
   S.copyText = null; S.sel = id; go("copy");
+  if ((w.posts || {})[id]) igSync(id, true);
 }
 function openLog(id) {
   const { r } = findRec(id);

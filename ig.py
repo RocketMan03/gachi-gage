@@ -64,10 +64,12 @@ def public_base():
 
 
 class IGError(Exception):
-    pass
+    def __init__(self, msg, code=None, sub=None, http=None):
+        super().__init__(msg)
+        self.code, self.sub, self.http = code, sub, http
 
 
-def _call(method, path, params):
+def _call(method, path, params, timeout=30):
     params = dict(params, access_token=token())
     url = f"{_host()}/{_ver()}/{path}"
     data = None
@@ -77,7 +79,7 @@ def _call(method, path, params):
         data = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(url, data=data, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode() or "{}")
     except urllib.error.HTTPError as e:
         try:
@@ -85,6 +87,9 @@ def _call(method, path, params):
         except Exception:
             err = {}
         code, msg = err.get("code"), err.get("error_user_msg") or err.get("message") or f"HTTP {e.code}"
+        sub, raw = err.get("error_subcode"), (err.get("message") or "").lower()
+        if e.code == 404 or sub == 33 or (code == 100 and "does not exist" in raw):
+            raise IGError("인스타그램에 이 게시물이 없어요. 이미 지워진 것 같아요.", code=code, sub=33, http=e.code)
         if code == 190:
             raise IGError("인스타그램 토큰이 만료됐거나 올바르지 않아요. Meta 개발자 화면에서 토큰을 다시 만들어 넣어 주세요.")
         if code in (10, 200) and method == "DELETE":
@@ -92,7 +97,7 @@ def _call(method, path, params):
                           f"인스타그램 앱에서 직접 지워 주세요. ({msg})")
         if code in (10, 200):
             raise IGError(f"게시 권한이 없어요. 토큰을 만들 때 instagram_business_content_publish 권한을 허용했는지 확인해 주세요. ({msg})")
-        raise IGError(f"인스타그램이 요청을 거절했어요: {msg}")
+        raise IGError(f"인스타그램이 요청을 거절했어요: {msg}", code=code, sub=sub, http=e.code)
     except urllib.error.URLError as e:
         raise IGError(f"인스타그램 서버에 연결하지 못했어요: {e.reason}")
 
@@ -206,3 +211,19 @@ def delete(media_id):
     if d.get("success") is False:
         raise IGError("인스타그램이 삭제를 완료하지 못했어요. 인스타그램 앱에서 확인해 주세요.")
     return True
+
+
+def gone(e):
+    """IGError가 '게시물이 없음'을 뜻하는지."""
+    return isinstance(e, IGError) and e.sub == 33
+
+
+def exists(media_id):
+    """인스타그램에 게시물이 아직 있으면 True, 확실히 지워졌으면 False, 확인하지 못했으면 None."""
+    if not enabled() or not media_id:
+        return None
+    try:
+        _call("GET", str(media_id), {"fields": "id"}, timeout=8)
+        return True
+    except IGError as e:
+        return False if gone(e) else None
