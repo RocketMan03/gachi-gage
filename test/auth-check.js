@@ -2,7 +2,9 @@
 // 주의: data/db.json에 owner1, owner2 계정과 가게A가 생겨요. 테스트용 폴더에서 돌리세요.
 const assert = require('assert');
 const B = 'http://localhost:3016';
+const OK = { terms: true, privacy: true, age: true }; // 필수 약관 동의
 async function call(method, path, body, cookie) {
+  if (/signup$/.test(path)) body = { consents: OK, ...body };
   const r = await fetch(B + path, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const set = r.headers.get('set-cookie');
   return { status: r.status, data: await r.json().catch(() => ({})), cookie: set ? set.split(';')[0] : null };
@@ -13,6 +15,7 @@ async function call(method, path, body, cookie) {
   assert.equal((await call('PUT', '/api/connections', { disconnect: 'threads' })).status, 401, '로그인 없이 연결 바꾸기');
   assert.equal((await call('GET', '/api/health')).status, 200, 'health는 공개');
   assert.ok(!('connections' in (await call('GET', '/api/health')).data), 'health에 연결 정보 없음');
+  assert.equal((await call('POST', '/api/auth/signup', { loginId: 'noagree', password: '12345678', consents: { terms: true } })).status, 400, '필수 약관 없이 가입 못 함');
   assert.equal((await call('POST', '/api/auth/signup', { loginId: 'AB', password: '12345678' })).status, 400, '짧은 아이디');
   assert.equal((await call('POST', '/api/auth/signup', { loginId: 'owner1', password: '1234' })).status, 400, '짧은 비번');
   const a = await call('POST', '/api/auth/signup', { loginId: 'owner1', password: 'password1' });

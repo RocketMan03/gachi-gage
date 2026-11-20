@@ -2,8 +2,8 @@
 // - 게시물 문구: 참고 사진을 Gemini가 직접 보고 작성 (Groq은 글만)
 // - AI 이미지: Gemini 이미지 모델 (무료 키에서는 막혀 있을 수 있음 → 화면에서 안내)
 
-const { buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt } = require('./prompts');
-const { mockPost, mockIdeas, mockFeedback } = require('./mock');
+const { buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt, buildPostFeedbackPrompt } = require('./prompts');
+const { mockPost, mockIdeas, mockFeedback, mockPostFeedback } = require('./mock');
 
 function providerName() {
   const p = (process.env.LLM_PROVIDER || 'auto').toLowerCase();
@@ -70,7 +70,7 @@ function configuredModel(kind) {
   return resolved.text || process.env.GEMINI_MODEL || 'gemini-3.5-flash'; // 2.5-flash는 새 키에서 404
 }
 
-// 응답 없이 멈추는 모델 (최신 미리보기 모델에서 자주 생김): 서버가 켜져 있는 동안 다시 고르지 않음
+// 응답 없이 멈추거나(408) 못 쓰는(404) 모델: 서버가 켜져 있는 동안 다시 고르지 않음
 const hanging = new Set();
 
 async function geminiRequest(kind, body) {
@@ -90,6 +90,7 @@ async function geminiRequest(kind, body) {
     });
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 404) hanging.add(model); // 목록엔 있어도 새 키에선 못 쓰는 모델(예: 2.5-flash): 다시 고르지 않음
       const err = new Error(res.status === 429
         ? `Gemini 무료 사용량을 다 썼어요 (${model}). 1분 뒤나 내일 다시 시도하거나, Google AI Studio에서 결제를 연결해 주세요.`
         : `Gemini ${res.status} (${model}): ${text.slice(0, 300)}`);
@@ -284,6 +285,32 @@ async function generateFeedback(store, data) {
   }
 }
 
+// 게시물 하나 피드백. 선플/악플은 그 게시물의 실제 댓글 문장만 남긴다
+async function generatePostFeedback(store, data) {
+  const mock = mockPostFeedback(store, data);
+  if (providerName() === 'mock') return { ...mock, source: 'mock' };
+  const { system, user } = buildPostFeedbackPrompt(store, data);
+  try {
+    const raw = await askJson(system, user);
+    const real = (t) => t.length >= 2 && data.comments.some((c) => c.text.includes(t));
+    const list = (v) => (Array.isArray(v) ? v : []);
+    const strs = (v, d) => { const a = list(v).map((x) => str(x)).filter(Boolean).slice(0, 4); return a.length ? a : d; };
+    return {
+      summary: str(raw?.summary, mock.summary),
+      good: strs(raw?.good, mock.good),
+      improve: strs(raw?.improve, mock.improve),
+      positive: list(raw?.positive).filter((x) => real(str(x?.text))).slice(0, 5).map((x) => ({ text: str(x.text), why: str(x.why) })),
+      negative: list(raw?.negative).filter((x) => real(str(x?.text))).slice(0, 5).map((x) => ({ text: str(x.text), why: str(x.why), reply: str(x.reply) })),
+      nextTime: strs(raw?.nextTime, mock.nextTime),
+      source: providerName(),
+    };
+  } catch (e) {
+    console.error('[llm] 게시물 피드백 실패:', e.message);
+    if (!allowFallback()) throw e;
+    return { ...mock, source: 'mock', fallbackReason: e.message };
+  }
+}
+
 // AI 이미지 생성/보정. source가 있으면 그 사진을 보정, 없으면 새로 생성.
 async function generateImage({ prompt, source }) {
   if (providerName() !== 'gemini') {
@@ -310,4 +337,4 @@ async function generateImage({ prompt, source }) {
   }
 }
 
-module.exports = { providerName, modelName, generatePost, generateIdeas, generateFeedback, generateImage, _pickModel: pickModel };
+module.exports = { providerName, modelName, generatePost, generateIdeas, generateFeedback, generatePostFeedback, generateImage, _pickModel: pickModel };

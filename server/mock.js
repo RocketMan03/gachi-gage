@@ -101,4 +101,22 @@ function mockFeedback(store, data) {
   };
 }
 
-module.exports = { mockPost, mockIdeas, mockFeedback };
+// AI 없이 만드는 게시물 하나 피드백
+function mockPostFeedback(store, data) {
+  const p = data.post;
+  const plats = Object.entries(p.byPlatform).sort((a, b) => (b[1].likes + b[1].comments * 2) - (a[1].likes + a[1].comments * 2));
+  const negative = data.comments.filter((c) => BAD.test(c.text)).slice(0, 5)
+    .map((c) => ({ text: c.text, why: '불만이나 아쉬움이 담긴 댓글이에요.', reply: '소중한 의견 감사합니다. 말씀해 주신 부분 꼭 개선할게요!' }));
+  const positive = data.comments.filter((c) => GOOD.test(c.text) && !BAD.test(c.text)).slice(0, 5)
+    .map((c) => ({ text: c.text, why: '가게나 상품을 좋게 말해 준 댓글이에요.' }));
+  return {
+    summary: `"${p.topic}" 게시물은 좋아요 ${p.total.likes}개, 답글 ${p.total.comments}개로 ${data.verdict === '첫 게시물' ? '아직 비교할 다른 게시물이 없어요' : data.verdict}${data.totalPosts > 1 ? ` (가게 게시물 ${data.totalPosts}개 중 ${data.rank}위)` : ''}.`,
+    good: [plats[0] ? `${plats[0][0]}에서 반응이 가장 좋았어요 (좋아요 ${plats[0][1].likes}, 답글 ${plats[0][1].comments}).` : '', positive.length ? `칭찬 댓글이 ${positive.length}개 있어요.` : ''].filter(Boolean),
+    improve: [p.total.comments === 0 ? '답글이 없었어요. 문구 끝에 질문을 넣어 대화를 유도해 보세요.' : '', negative.length ? `불만 댓글 ${negative.length}개에 답글을 달아 주세요.` : '', plats.length > 1 ? `${plats[plats.length - 1][0]} 반응이 상대적으로 적었어요.` : ''].filter(Boolean),
+    positive,
+    negative,
+    nextTime: [`다음에도 ${p.style} 스타일을 쓰되 편집 효과를 바꿔 비교해 보세요.`, '올리는 시간대를 바꿔 반응을 비교해 보세요.'],
+  };
+}
+
+module.exports = { mockPost, mockIdeas, mockFeedback, mockPostFeedback };

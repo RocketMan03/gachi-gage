@@ -144,4 +144,42 @@ function buildFeedbackPrompt(store, data) {
   };
 }
 
-module.exports = { storeToText, buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt };
+// 게시물 하나 피드백
+const POST_FEEDBACK_SYSTEM = `너는 소상공인 사장님의 SNS 담당 코치다. 게시물 하나의 반응(SNS별 좋아요·답글)과 그 게시물에 달린 댓글을 보고, 이 게시물이 왜 이런 반응을 얻었는지 쉬운 말로 알려 준다.
+
+규칙:
+1. 숫자는 주어진 데이터에 있는 것만 쓴다. 가게 평균과의 비교 결과([평가])를 그대로 따른다.
+2. good: 이 게시물에서 잘된 점 1~3개 (문구, 카드 스타일·효과, 주제, 어느 SNS에서 반응이 좋았는지 등 근거와 함께).
+3. improve: 아쉬운 점·고칠 점 1~3개. 반응이 좋아도 더 나아질 점을 찾는다.
+4. positive(선플)와 negative(악플·불만)는 반드시 [댓글]에 있는 문장을 text에 그대로 옮긴다. 없으면 빈 배열. negative에는 정중한 답글 예시(reply)를 쓴다.
+5. nextTime: 이 게시물을 바탕으로 다음에 비슷한 게시물을 올릴 때 바꿔 볼 것 2~3개.
+6. 다정하게, 과장하지 않는다.
+
+반드시 아래 JSON 형식으로만 답한다.
+{
+  "summary": "이 게시물 반응 요약 1~2문장",
+  "good": ["잘된 점"],
+  "improve": ["아쉬운 점"],
+  "positive": [ { "text": "댓글 원문", "why": "한 줄" } ],
+  "negative": [ { "text": "댓글 원문", "why": "한 줄", "reply": "답글 예시" } ],
+  "nextTime": ["다음에 바꿔 볼 것"]
+}`;
+
+function buildPostFeedbackPrompt(store, data) {
+  const p = data.post;
+  const plat = Object.entries(p.byPlatform).map(([n, v]) => `${n}: 좋아요 ${v.likes}, 답글 ${v.comments}`).join(' / ');
+  const comments = data.comments.map((c) => `- [${c.platformName}]${c.likes ? ` (좋아요 ${c.likes})` : ''} ${c.text}`).join('\n') || '(댓글 없음)';
+  return {
+    system: POST_FEEDBACK_SYSTEM,
+    user: [
+      `[가게 정보]\n${storeToText(store)}`,
+      `[게시물]\n주제: ${p.topic}\n카드 스타일: ${p.style} / 효과: ${p.effect} / 분위기: ${p.tone || '-'}\n카드 제목: ${p.headline || '-'}\n올린 날: ${p.at.slice(0, 10)}\n문구 앞부분: ${p.caption || '-'}`,
+      `[반응] ${plat}\n합계 좋아요 ${p.total.likes}, 답글 ${p.total.comments} → 반응 점수 ${p.score} (좋아요 + 답글×2)`,
+      `[평가] 가게 게시물 ${data.totalPosts}개 중 ${data.rank}위, 다른 게시물 평균 점수 ${data.avg ?? '-'} → ${data.verdict}`,
+      `[댓글]\n${comments}`,
+      '이 게시물 하나에 대한 피드백을 주세요.',
+    ].join('\n\n'),
+  };
+}
+
+module.exports = { storeToText, buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt, buildPostFeedbackPrompt };

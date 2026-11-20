@@ -284,9 +284,8 @@ function postStyle(post) {
 }
 const reactScore = (t) => t.likes + t.comments * 2; // 답글은 좋아요보다 품이 드니 2배
 
-app.post('/api/stores/:id/feedback', wrap(async (req, res) => {
-  const store = needStore(req, res);
-  if (!store) return;
+// 가게의 SNS 게시물마다 세 SNS 반응·댓글 모으기 (가게 전체 피드백·게시물별 피드백이 같이 씀)
+async function collectReactions(store) {
   const conns = connections.get();
   const posts = [];
   const comments = [];
@@ -295,31 +294,63 @@ app.post('/api/stores/:id/feedback', wrap(async (req, res) => {
     const pubs = Object.entries(post.publications || {}).filter(([, p]) => p.status === 'published' && p.id);
     if (!pubs.length) continue;
     const total = { likes: 0, comments: 0 };
+    const byPlatform = {};
     for (const [platform, pub] of pubs) {
       try {
         const r = await reactions(platform, conns, pub); // 반응 화면과 같은 함수: 좋아요·답글 수 + 답글 내용
+        byPlatform[PLATFORM_NAMES[platform]] = { likes: r.counts?.likes || 0, comments: r.counts?.comments || 0 };
         total.likes += r.counts?.likes || 0;
         total.comments += r.counts?.comments || 0;
-        for (const c of r.comments) if (c.text.trim()) comments.push({ platform, platformName: PLATFORM_NAMES[platform], postId: post.id, topic: post.topic, text: c.text, username: c.username, likes: c.likes || 0 });
+        for (const c of r.comments) if (c.text.trim()) comments.push({ platform, platformName: PLATFORM_NAMES[platform], postId: post.id, topic: post.topic, text: c.text.slice(0, 200), username: c.username, likes: c.likes || 0 });
         if (r.errors.comments || r.errors.counts) errors[platform] = r.errors.comments || r.errors.counts;
       } catch (e) {
         errors[platform] = e.message;
       }
     }
     posts.push({ postId: post.id, topic: post.topic, tone: post.tone, at: pubs[0][1].at || post.createdAt,
-      platforms: pubs.map(([p]) => PLATFORM_NAMES[p]), ...postStyle(post), total, score: reactScore(total) });
+      platforms: pubs.map(([p]) => PLATFORM_NAMES[p]), ...postStyle(post), total, byPlatform, score: reactScore(total) });
   }
   posts.sort((a, b) => b.score - a.score);
+  comments.sort((a, b) => b.likes - a.likes);
+  return { posts, comments, errors };
+}
+
+// 가게 전체 피드백: 게시물끼리 비교 (어떤 스타일이 잘 되나, 다음엔 뭘 만들까)
+app.post('/api/stores/:id/feedback', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const { posts, comments, errors } = await collectReactions(store);
   // 스타일 × 효과별 평균 점수
   const groups = {};
   for (const p of posts) (groups[`${p.style} + ${p.effect}`] ||= []).push(p.score);
   const byStyle = Object.entries(groups)
     .map(([name, s]) => ({ name, count: s.length, avg: Math.round(s.reduce((a, b) => a + b, 0) / s.length) }))
     .sort((a, b) => b.avg - a.avg);
-  comments.sort((a, b) => b.likes - a.likes);
-  const data = { posts, byStyle, comments: comments.slice(0, 80).map((c) => ({ ...c, text: c.text.slice(0, 200) })) };
+  const data = { posts, byStyle, comments: comments.slice(0, 80) };
   const ai = await llm.generateFeedback(store, data);
   res.json({ posts, byStyle, commentCount: comments.length, errors, ...ai, generatedAt: db.now() });
+}));
+
+// 게시물별 피드백: 이 게시물 하나 (SNS별 반응, 이 게시물 댓글, 가게 평균과 비교)
+app.post('/api/posts/:postId/feedback', wrap(async (req, res) => {
+  const post = needPost(req, res);
+  if (!post) return;
+  const store = db.getStore(post.storeId);
+  const { posts, comments, errors } = await collectReactions(store);
+  const me = posts.find((p) => p.postId === post.id);
+  if (!me) return res.status(400).json({ error: 'SNS에 올라간 게시물만 분석할 수 있어요.' });
+  const others = posts.filter((p) => p !== me);
+  const avg = others.length ? Math.round(others.reduce((n, p) => n + p.score, 0) / others.length) : null;
+  const data = {
+    post: { ...me, headline: post.headline || '', caption: (post.captions?.instagram || post.captions?.facebook || post.captions?.threads || '').slice(0, 400) },
+    rank: posts.indexOf(me) + 1, totalPosts: posts.length, avg,
+    // 평균보다 1.2배 이상이면 좋음, 0.8배 미만이면 아쉬움 (비교할 게시물이 없으면 판단 안 함)
+    verdict: avg == null ? '첫 게시물' : me.score >= avg * 1.2 ? '평균보다 좋아요' : me.score < avg * 0.8 ? '평균보다 아쉬워요' : '평균 정도예요',
+    comments: comments.filter((c) => c.postId === post.id).slice(0, 50),
+  };
+  const ai = await llm.generatePostFeedback(store, data);
+  res.json({ post: data.post, rank: data.rank, totalPosts: data.totalPosts, avg, verdict: data.verdict,
+    commentCount: data.comments.length, errors, ...ai, generatedAt: db.now() });
 }));
 
 // 게시물 한 개의 반응 (게시물 화면용)

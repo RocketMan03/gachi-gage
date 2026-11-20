@@ -395,14 +395,14 @@ async function renderInsta(refresh) {
   $app.innerHTML = `
     <div class="head-row"><div><h1>반응</h1><p class="lead" style="margin:0">인스타그램·페이스북·스레드에 올린 게시물의 좋아요와 답글</p></div>
       <button class="btn ghost" data-ig-refresh>🔄 새로고침</button></div>
-    <button class="btn primary block" data-ai-feedback style="margin-bottom:12px">✨ AI 피드백 · 인스타·페이스북·스레드 반응 분석</button>
+    <button class="btn primary block" data-ai-feedback style="margin-bottom:12px">✨ 가게 전체 AI 피드백 · 모든 게시물 비교</button>
     <div class="ig-total" style="grid-template-columns:repeat(2,1fr)"><div><b>${nf(likes)}</b><span>좋아요</span></div><div><b>${nf(replies)}</b><span>답글</span></div></div>
     ${items.length ? items.map((x) => `<article class="card ig-item">
         <div class="ig-item-top">
           <div class="post-thumb">${x.cover ? `<img src="${esc(x.cover)}" alt="" />` : '<span>📝</span>'}</div>
           <div style="flex:1;min-width:0">
             <div class="post-top"><span class="post-title" style="margin:0">${esc(x.topic)}</span><span class="date">${esc(fmtDate(x.at))}</span></div>
-            <div class="row" style="margin-top:8px"><button class="btn line sm" data-open="${x.postId}">게시물 관리</button></div>
+            <div class="row" style="margin-top:8px"><button class="btn line sm" data-open="${x.postId}">게시물 관리</button><button class="btn line sm" data-post-feedback="${x.postId}">✨ 이 게시물 분석</button></div>
           </div>
         </div>
         ${PLATFORMS.filter((pf) => x.platforms[pf.id]).map((pf) => platformBlock(x.postId, pf.id, x.platforms[pf.id], 3)).join('')}
@@ -433,7 +433,7 @@ async function openFeedback() {
   const errs = Object.entries(d.errors || {});
   const li = (arr) => arr.map((x) => `<li>${esc(x)}</li>`).join('');
   m.el.querySelector('.modal-box').innerHTML = `
-    <div class="week-head"><h2 style="margin:0">✨ AI 피드백</h2><span class="hint">${d.source === 'mock' ? '예시 분석' : 'AI 분석'}</span></div>
+    <div class="week-head"><h2 style="margin:0">✨ 가게 전체 AI 피드백</h2><span class="hint">${d.source === 'mock' ? '예시 분석' : 'AI 분석'}</span></div>
     <p style="margin:8px 0 0">${esc(d.summary)}</p>
     ${d.fallbackReason ? `<div class="ig-note">AI 연결이 안 돼서 규칙으로 분석했어요.</div>` : ''}
 
@@ -538,6 +538,41 @@ async function openCustomer(id) {
         }
       } catch (err) { toast(err.message); }
     });
+}
+
+// ---------- 게시물 하나 AI 분석: SNS별 반응, 이 게시물 댓글, 가게 평균과 비교 ----------
+$app.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-post-feedback]');
+  if (b) openPostFeedback(b.dataset.postFeedback);
+});
+async function openPostFeedback(postId) {
+  const m = modal('<div class="loading"><div class="spinner"></div>이 게시물의 반응과 댓글을 AI가 분석하는 중…</div>');
+  let d;
+  try { d = await api('POST', `/api/posts/${postId}/feedback`); }
+  catch (err) { m.el.querySelector('.modal-box').innerHTML = `<div class="card">${esc(err.message)}</div><button class="btn line block" data-m="close">닫기</button>`; return; }
+  if (!document.body.contains(m.el)) return;
+  const li = (arr) => (arr || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  const p = d.post;
+  const tone = d.verdict === '평균보다 좋아요' ? 'best' : '';
+  m.el.querySelector('.modal-box').innerHTML = `
+    <div class="week-head"><h2 style="margin:0">✨ 게시물 분석</h2><span class="hint">${d.source === 'mock' ? '예시 분석' : 'AI 분석'}</span></div>
+    <div class="post-title" style="margin:6px 0 2px">${esc(p.topic)}</div>
+    <div class="hint">${esc(p.style)} + ${esc(p.effect)} · ${esc(fmtDate(p.at))}</div>
+    <div class="fb-table" style="margin-top:10px">
+      <div class="fb-row ${tone}"><span><b>${esc(d.verdict)}</b>${d.totalPosts > 1 ? `<br><span class="hint">가게 게시물 ${d.totalPosts}개 중 ${d.rank}위 · 다른 게시물 평균 ${d.avg}점</span>` : ''}</span><span><b>${p.score}</b>점</span></div>
+      ${Object.entries(p.byPlatform).map(([n, v]) => `<div class="fb-row"><span>${esc(n)}</span><span>♡ ${nf(v.likes)} · 💬 ${nf(v.comments)}</span></div>`).join('')}
+    </div>
+    <p style="margin:10px 0 0">${esc(d.summary)}</p>
+    ${d.fallbackReason ? '<div class="ig-note">AI 연결이 안 돼서 규칙으로 분석했어요.</div>' : ''}
+    <div class="fact-title">👍 잘된 점</div><ul class="plain">${li(d.good)}</ul>
+    <div class="fact-title">🔧 아쉬운 점</div><ul class="plain">${li(d.improve)}</ul>
+    <div class="fact-title">😊 선플 (${d.positive.length})</div>
+    ${d.positive.length ? d.positive.map((x) => `<div class="fb-cmt good">“${esc(x.text)}”<div class="hint">${esc(x.why)}</div></div>`).join('') : '<div class="hint">이 게시물엔 눈에 띄는 칭찬 댓글이 없어요.</div>'}
+    <div class="fact-title">😟 악플·아쉬운 점 (${d.negative.length})</div>
+    ${d.negative.length ? d.negative.map((x) => `<div class="fb-cmt bad">“${esc(x.text)}”<div class="hint">${esc(x.why)}</div>${x.reply ? `<div class="fb-reply">💬 답글 예시: ${esc(x.reply)}</div>` : ''}</div>`).join('') : '<div class="hint">불만 댓글은 없었어요.</div>'}
+    <div class="fact-title">📌 다음에 비슷한 게시물을 올린다면</div><ul class="plain">${li(d.nextTime)}</ul>
+    <p class="hint" style="margin-top:12px">이 게시물 댓글 ${nf(d.commentCount)}개 분석 · 반응 점수 = 좋아요 + 답글×2${Object.keys(d.errors || {}).length ? `<br>못 가져온 곳: ${Object.entries(d.errors).map(([k, v]) => `${esc(PF[k]?.name || k)} (${esc(v)})`).join(', ')}` : ''}</p>
+    <div class="row"><button class="btn line" data-m="close">닫기</button></div>`;
 }
 
 // ---------- 새 게시물: 1단계 입력 ----------
@@ -847,7 +882,8 @@ async function loadPostComments(force) {
   }
   const el = document.getElementById('igc');
   if (!el || state.post?.id !== id) return;
-  el.innerHTML = PLATFORMS.filter((pf) => igcData.platforms?.[pf.id]).map((pf) => platformBlock(id, pf.id, igcData.platforms[pf.id], 5)).join('');
+  const blocks = PLATFORMS.filter((pf) => igcData.platforms?.[pf.id]).map((pf) => platformBlock(id, pf.id, igcData.platforms[pf.id], 5)).join('');
+  el.innerHTML = blocks + (blocks ? `<button class="btn line block" data-post-feedback="${id}" style="margin-top:8px">✨ 이 게시물 AI 분석</button>` : '');
 }
 $app.addEventListener('click', (e) => {
   const b = e.target.closest('[data-rc-more]');
