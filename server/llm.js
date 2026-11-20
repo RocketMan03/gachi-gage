@@ -260,6 +260,19 @@ async function generateIdeas(store, pastPosts) {
   }
 }
 
+// AI가 쓴 글(요약·이유·답글 예시·제안)에서 링크 주소를 지운다. 댓글로 AI를 조종해 사장님이 이상한 링크를 복사하게 만드는 것 방지.
+// 선플·악플 text는 실제 댓글 원문이라 그대로 둔다 (화면에서 글자로만 보임).
+const LINK = /\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(?:com|net|kr|io|me|ly|co|xyz|site|link)(?:\/\S*)?/gi;
+const noLinks = (t) => (typeof t === 'string' ? t.replace(LINK, '(링크 삭제)') : t);
+function scrubLinks(out) {
+  const keepText = (x) => ({ ...x, why: noLinks(x.why), ...(x.reply !== undefined ? { reply: noLinks(x.reply) } : {}) });
+  const o = { ...out };
+  for (const k of ['summary']) if (o[k]) o[k] = noLinks(o[k]);
+  for (const k of ['styleInsights', 'suggestions', 'good', 'improve', 'nextTime']) if (Array.isArray(o[k])) o[k] = o[k].map(noLinks);
+  for (const k of ['positive', 'negative']) if (Array.isArray(o[k])) o[k] = o[k].map(keepText);
+  return o;
+}
+
 // 게시물 반응 피드백. 선플/악플은 실제 댓글에 있는 문장만 남긴다 (AI가 지어낸 댓글 방지)
 async function generateFeedback(store, data) {
   const mock = mockFeedback(store, data);
@@ -270,14 +283,14 @@ async function generateFeedback(store, data) {
     const real = (t) => t.length >= 2 && data.comments.some((c) => c.text.includes(t)); // AI가 원문 일부만 옮겨도 인정
     const list = (v) => (Array.isArray(v) ? v : []);
     const strs = (v) => list(v).map((x) => str(x)).filter(Boolean).slice(0, 6);
-    return {
+    return scrubLinks({
       summary: str(raw?.summary, mock.summary),
       styleInsights: strs(raw?.styleInsights).length ? strs(raw.styleInsights) : mock.styleInsights,
       positive: list(raw?.positive).filter((x) => real(str(x?.text))).slice(0, 6).map((x) => ({ text: str(x.text), why: str(x.why) })),
       negative: list(raw?.negative).filter((x) => real(str(x?.text))).slice(0, 6).map((x) => ({ text: str(x.text), why: str(x.why), reply: str(x.reply) })),
       suggestions: strs(raw?.suggestions).length ? strs(raw.suggestions) : mock.suggestions,
       source: providerName(),
-    };
+    });
   } catch (e) {
     console.error('[llm] 피드백 생성 실패:', e.message);
     if (!allowFallback()) throw e;
@@ -295,7 +308,7 @@ async function generatePostFeedback(store, data) {
     const real = (t) => t.length >= 2 && data.comments.some((c) => c.text.includes(t));
     const list = (v) => (Array.isArray(v) ? v : []);
     const strs = (v, d) => { const a = list(v).map((x) => str(x)).filter(Boolean).slice(0, 4); return a.length ? a : d; };
-    return {
+    return scrubLinks({
       summary: str(raw?.summary, mock.summary),
       good: strs(raw?.good, mock.good),
       improve: strs(raw?.improve, mock.improve),
@@ -303,7 +316,7 @@ async function generatePostFeedback(store, data) {
       negative: list(raw?.negative).filter((x) => real(str(x?.text))).slice(0, 5).map((x) => ({ text: str(x.text), why: str(x.why), reply: str(x.reply) })),
       nextTime: strs(raw?.nextTime, mock.nextTime),
       source: providerName(),
-    };
+    });
   } catch (e) {
     console.error('[llm] 게시물 피드백 실패:', e.message);
     if (!allowFallback()) throw e;
@@ -337,4 +350,4 @@ async function generateImage({ prompt, source }) {
   }
 }
 
-module.exports = { providerName, modelName, generatePost, generateIdeas, generateFeedback, generatePostFeedback, generateImage, _pickModel: pickModel };
+module.exports = { scrubLinks, providerName, modelName, generatePost, generateIdeas, generateFeedback, generatePostFeedback, generateImage, _pickModel: pickModel };

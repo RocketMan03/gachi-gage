@@ -454,6 +454,7 @@ async function openFeedback() {
     <ul class="plain">${li(d.suggestions || [])}</ul>
 
     <p class="hint" style="margin-top:12px">댓글 ${nf(d.commentCount)}개 · 게시물 ${d.posts.length}개 분석 · 반응 점수 = 좋아요 + 답글×2${errs.length ? `<br>못 가져온 곳: ${errs.map(([p, msg]) => `${esc(PLATFORMS.find((x) => x.id === p)?.name || p)} (${esc(msg)})`).join(', ')}` : ''}</p>
+    <p class="hint" style="margin:8px 0 0">AI 분석은 참고용이에요. 답글 예시는 내용을 확인하고 다듬어서 달아 주세요.</p>
     <div class="row"><button class="btn primary" data-go-new>이 제안으로 새 게시물 만들기</button><button class="btn line" data-m="close">닫기</button></div>`;
   m.el.addEventListener('click', (e) => {
     const open = e.target.closest('[data-fb-open]');
@@ -571,6 +572,7 @@ async function openPostFeedback(postId) {
     <div class="fact-title">😟 악플·아쉬운 점 (${d.negative.length})</div>
     ${d.negative.length ? d.negative.map((x) => `<div class="fb-cmt bad">“${esc(x.text)}”<div class="hint">${esc(x.why)}</div>${x.reply ? `<div class="fb-reply">💬 답글 예시: ${esc(x.reply)}</div>` : ''}</div>`).join('') : '<div class="hint">불만 댓글은 없었어요.</div>'}
     <div class="fact-title">📌 다음에 비슷한 게시물을 올린다면</div><ul class="plain">${li(d.nextTime)}</ul>
+    <p class="hint" style="margin:8px 0 0">AI 분석은 참고용이에요. 답글 예시는 내용을 확인하고 다듬어서 달아 주세요.</p>
     <p class="hint" style="margin-top:12px">이 게시물 댓글 ${nf(d.commentCount)}개 분석 · 반응 점수 = 좋아요 + 답글×2${Object.keys(d.errors || {}).length ? `<br>못 가져온 곳: ${Object.entries(d.errors).map(([k, v]) => `${esc(PF[k]?.name || k)} (${esc(v)})`).join(', ')}` : ''}</p>
     <div class="row"><button class="btn line" data-m="close">닫기</button></div>`;
 }
