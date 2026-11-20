@@ -302,3 +302,4 @@ textarea.cap { min-height: 220px; line-height: 1.7; }
 .ig-comment .when { font-size: 11px; color: var(--sub); margin-left: 6px; }
 .ig-comment .reply { margin: 6px 0 0 14px; padding-left: 10px; border-left: 2px solid var(--line); }
 .ig-note { font-size: 11px; color: var(--warn); margin-top: 6px; }
+a.metric { text-decoration: none; color: var(--main); }

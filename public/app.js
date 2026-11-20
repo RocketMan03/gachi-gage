@@ -342,8 +342,8 @@ async function renderPosts() {
     }).join('') : `<div class="card empty">${posts.length ? '이 조건의 게시물이 없어요.' : '아직 만든 게시물이 없어요.<br>위의 <b>새 게시물 만들기</b>를 눌러 첫 게시물을 만들어 보세요!'}</div>`}`;
 }
 
-// ---------- 인스타그램 반응 (좋아요·댓글) ----------
-const igOpen = new Set(); // 댓글을 전부 펼친 게시물
+// ---------- 반응 (인스타·페이스북·스레드): 좋아요·답글 수 + 답글 내용 ----------
+const igOpen = new Set(); // 답글을 전부 펼친 '게시물:플랫폼'
 const ago = (iso) => {
   if (!iso) return '';
   const m = Math.floor((Date.now() - new Date(iso)) / 60000);
@@ -353,66 +353,69 @@ const ago = (iso) => {
   return fmtDate(iso);
 };
 const nf = (n) => Number(n || 0).toLocaleString('ko-KR');
+const who = (pf, name) => (pf === 'facebook' ? esc(name || 'Facebook 사용자') : `@${esc(name || '알 수 없음')}`);
 
-function igCommentHtml(c) {
-  return `<div class="ig-comment"><span class="who">@${esc(c.username || '알 수 없음')}</span>${esc(c.text)}<span class="when">${esc(ago(c.at))}${c.likes ? ` · ♡ ${nf(c.likes)}` : ''}</span>
-    ${(c.replies || []).map((r) => `<div class="reply"><span class="who">@${esc(r.username || '알 수 없음')}</span>${esc(r.text)}<span class="when">${esc(ago(r.at))}</span></div>`).join('')}</div>`;
+function commentHtml(pf, c) {
+  return `<div class="ig-comment"><span class="who">${who(pf, c.username)}</span>${esc(c.text)}<span class="when">${esc(ago(c.at))}${c.likes ? ` · ♡ ${nf(c.likes)}` : ''}</span>
+    ${(c.replies || []).map((r) => `<div class="reply"><span class="who">${who(pf, r.username)}</span>${esc(r.text)}<span class="when">${esc(ago(r.at))}</span></div>`).join('')}</div>`;
+}
+// 좋아요·답글 칩 (모든 플랫폼 공통)
+const countChips = (c) => `<span class="metric big">♡ 좋아요 <b>${c ? nf(c.likes) : '–'}</b></span><span class="metric big">💬 답글 <b>${c ? nf(c.comments) : '–'}</b></span>`;
+
+// 한 플랫폼의 답글 목록 (show개까지 보이고 나머지는 펼치기)
+function platformReplies(postId, pf, x, show = 3) {
+  const key = `${postId}:${pf}`;
+  const list = x.comments || [];
+  const all = igOpen.has(key);
+  if (x.error) return `<div class="ig-note">${esc(x.error)}</div>`;
+  return `${x.errors?.counts ? `<div class="ig-note">숫자: ${esc(x.errors.counts)}</div>` : ''}
+    ${x.errors?.comments ? `<div class="ig-note">답글: ${esc(x.errors.comments)}</div>`
+      : list.length ? (all ? list : list.slice(0, show)).map((c) => commentHtml(pf, c)).join('') + (list.length > show ? `<button class="btn ghost" data-rc-more="${esc(key)}">${all ? '접기' : `답글 ${list.length - show}개 더 보기`}</button>` : '')
+      : '<div class="hint" style="padding:6px 0">아직 답글이 없어요.</div>'}`;
+}
+
+function platformBlock(postId, pf, x, show) {
+  const P = PF[pf];
+  return `<div class="ig-comments">
+    <div class="week-head" style="margin-bottom:4px;gap:6px;flex-wrap:wrap"><b style="font-size:14px">${P.icon} ${P.name}</b>
+      <span class="ig-stats" style="margin:0">${countChips(x.counts)}${x.permalink || x.url ? `<a class="metric" href="${esc(x.permalink || x.url)}" target="_blank" rel="noopener">보기 ›</a>` : ''}</span></div>
+    ${platformReplies(postId, pf, x, show)}</div>`;
 }
 
 async function renderInsta(refresh) {
-  if (!refresh) loading('인스타그램에서 반응을 가져오는 중…');
+  if (!refresh) loading('SNS에서 반응을 가져오는 중…');
   let d;
-  try { d = await api('GET', `/api/stores/${state.storeId}/instagram${refresh ? '?refresh=1' : ''}`); }
-  catch (err) { $app.innerHTML = `<h1>인스타 반응</h1><div class="card">${esc(err.message)}</div>`; return; }
+  try { d = await api('GET', `/api/stores/${state.storeId}/reactions${refresh ? '?refresh=1' : ''}`); }
+  catch (err) { $app.innerHTML = `<h1>반응</h1><div class="card">${esc(err.message)}</div>`; return; }
   if (state.view !== 'insta') return;
-  if (!d.connected) {
-    $app.innerHTML = `<h1>인스타 반응</h1><p class="lead">인스타그램에 올린 게시물의 좋아요와 댓글을 모아 보는 곳이에요.</p>
-      <div class="card empty">인스타그램이 연결되지 않았어요.<br><button class="btn primary" data-go="channels" style="margin-top:12px">계정 연결하러 가기</button></div>`;
-    return;
-  }
   const items = d.items;
-  const sum = (k) => items.reduce((n, x) => n + (x.counts?.[k] || 0), 0);
-  const views = items.reduce((n, x) => n + (x.insights?.views || 0), 0);
+  let likes = 0, replies = 0;
+  for (const it of items) for (const x of Object.values(it.platforms)) { likes += x.counts?.likes || 0; replies += x.counts?.comments || 0; }
   $app.innerHTML = `
-    <div class="head-row"><div><h1>인스타 반응</h1><p class="lead" style="margin:0">올린 게시물의 좋아요와 댓글을 한곳에서 봐요</p></div>
+    <div class="head-row"><div><h1>반응</h1><p class="lead" style="margin:0">인스타그램·페이스북·스레드에 올린 게시물의 좋아요와 답글</p></div>
       <button class="btn ghost" data-ig-refresh>🔄 새로고침</button></div>
-    <div class="ig-total"><div><b>${nf(sum('likes'))}</b><span>좋아요</span></div><div><b>${nf(sum('comments'))}</b><span>댓글</span></div><div><b>${views ? nf(views) : '–'}</b><span>조회수</span></div></div>
-    ${items.length ? items.map((x) => {
-      const all = igOpen.has(x.postId);
-      const list = x.comments || [];
-      const shown = all ? list : list.slice(0, 3);
-      const ins = x.insights || {};
-      return `<article class="card ig-item">
+    <div class="ig-total" style="grid-template-columns:repeat(2,1fr)"><div><b>${nf(likes)}</b><span>좋아요</span></div><div><b>${nf(replies)}</b><span>답글</span></div></div>
+    ${items.length ? items.map((x) => `<article class="card ig-item">
         <div class="ig-item-top">
-          <div class="post-thumb">${x.cover ? `<img src="${esc(x.cover)}" alt="" />` : '<span>📸</span>'}</div>
+          <div class="post-thumb">${x.cover ? `<img src="${esc(x.cover)}" alt="" />` : '<span>📝</span>'}</div>
           <div style="flex:1;min-width:0">
             <div class="post-top"><span class="post-title" style="margin:0">${esc(x.topic)}</span><span class="date">${esc(fmtDate(x.at))}</span></div>
-            ${x.error ? `<div class="ig-note">${esc(x.error)}</div>` : `<div class="ig-stats">
-              <span class="metric big">♡ 좋아요 <b>${nf(x.counts?.likes)}</b></span><span class="metric big">💬 댓글 <b>${nf(x.counts?.comments)}</b></span>
-              ${ins.views != null ? `<span class="metric">조회 <b>${nf(ins.views)}</b></span>` : ''}${ins.reach != null ? `<span class="metric">도달 <b>${nf(ins.reach)}</b></span>` : ''}
-              ${ins.saved != null ? `<span class="metric">저장 <b>${nf(ins.saved)}</b></span>` : ''}${ins.shares != null ? `<span class="metric">공유 <b>${nf(ins.shares)}</b></span>` : ''}</div>`}
-            <div class="row" style="margin-top:8px;gap:6px">${x.permalink || x.url ? `<a class="btn line sm" href="${esc(x.permalink || x.url)}" target="_blank" rel="noopener">인스타에서 보기</a>` : ''}<button class="btn line sm" data-open="${x.postId}">게시물 관리</button></div>
+            <div class="row" style="margin-top:8px"><button class="btn line sm" data-open="${x.postId}">게시물 관리</button></div>
           </div>
         </div>
-        ${x.error ? '' : `<div class="ig-comments">
-          ${x.errors?.comments ? `<div class="ig-note">댓글 내용: ${esc(x.errors.comments)}</div>`
-            : list.length ? shown.map(igCommentHtml).join('') + (list.length > 3 ? `<button class="btn ghost" data-ig-more="${x.postId}">${all ? '접기' : `댓글 ${list.length - 3}개 더 보기`}</button>` : '')
-            : '<div class="hint" style="padding:6px 0">아직 댓글이 없어요.</div>'}
-          ${x.errors?.insights ? `<div class="ig-note">조회수 등: ${esc(x.errors.insights)}</div>` : ''}
-        </div>`}
-      </article>`;
-    }).join('') : '<div class="card empty">아직 인스타그램에 올린 게시물이 없어요.<br>새 게시물을 만들어 인스타그램에 올려 보세요.</div>'}
-    <p class="hint" style="text-align:center">${esc(fmtDate(d.fetchedAt))} 기준 · 조회수·도달은 인스타그램에서 최대 48시간 늦게 반영될 수 있어요</p>`;
+        ${PLATFORMS.filter((pf) => x.platforms[pf.id]).map((pf) => platformBlock(x.postId, pf.id, x.platforms[pf.id], 3)).join('')}
+      </article>`).join('') : '<div class="card empty">아직 SNS에 올린 게시물이 없어요.<br>새 게시물을 만들어 올려 보세요.</div>'}
+    <p class="hint" style="text-align:center">${esc(fmtDate(d.fetchedAt))} 기준</p>`;
   if (d.removed?.length) removedToast(d.removed);
 }
 
 $app.addEventListener('click', async (e) => {
   if (state.view !== 'insta') return;
   if (e.target.closest('[data-ig-refresh]')) { toast('새로 불러오는 중…'); await renderInsta(true); toast('최신 반응으로 바꿨어요.'); return; }
-  const more = e.target.closest('[data-ig-more]');
+  const more = e.target.closest('[data-rc-more]');
   if (more) {
-    const id = more.dataset.igMore;
-    igOpen.has(id) ? igOpen.delete(id) : igOpen.add(id);
+    const k = more.dataset.rcMore;
+    igOpen.has(k) ? igOpen.delete(k) : igOpen.add(k);
     const y = window.scrollY; await renderInsta(); window.scrollTo(0, y);
   }
 });
@@ -601,7 +604,7 @@ function publicationsHtml(post) {
     <div class="week-head"><h2 style="margin:0">게시 현황</h2><button class="btn ghost" data-action="metrics">🔄 반응 새로고침</button></div>
     ${entries.map((pf) => {
       const p = post.publications[pf.id];
-      const metrics = p.metrics ? Object.entries(p.metrics).map(([k, v]) => `<span class="metric">${esc(k)} <b>${esc(v)}</b></span>`).join('') : '';
+      const metrics = ''; // 좋아요·답글은 아래 플랫폼별 칸에서 보여줌
       return `<div class="pub-row">
         <div class="pub-main">
           <div><b>${pf.icon} ${pf.name}</b> <span class="status-badge ${p.status}">${p.status === 'published' ? '게시됨' : p.status === 'failed' ? '실패' : '삭제됨'}</span></div>
@@ -614,7 +617,7 @@ function publicationsHtml(post) {
         </div>
       </div>`;
     }).join('')}
-    ${post.publications?.instagram?.status === 'published' ? '<div id="igc" class="ig-comments"><div class="hint">인스타그램 댓글을 불러오는 중…</div></div>' : ''}
+    ${Object.values(post.publications || {}).some((p) => p.status === 'published') ? '<div id="igc"><div class="hint" style="padding-top:8px">좋아요와 답글을 불러오는 중…</div></div>' : ''}
     <p class="hint" style="margin:8px 0 0">SNS 앱에서 직접 지워도 여기에 자동으로 반영돼요.</p>
   </div>`;
 }
@@ -711,29 +714,26 @@ async function openPost(postId) {
   snsSync(true);
 }
 
-// 게시물 화면의 '게시 현황' 아래에 인스타 댓글 목록 채우기
+// 게시물 화면의 '게시 현황' 아래에 플랫폼별 좋아요·답글과 답글 목록 채우기
 let igcData = null;
 async function loadPostComments(force) {
   const box = document.getElementById('igc');
   if (!box || !state.post) return;
   const id = state.post.id;
   if (force || !igcData || igcData.postId !== id) {
-    try { igcData = { postId: id, ...(await api('GET', `/api/posts/${id}/instagram`)) }; }
-    catch (err) { box.innerHTML = `<div class="ig-note">댓글을 불러오지 못했어요: ${esc(err.message)}</div>`; return; }
+    try { igcData = { postId: id, ...(await api('GET', `/api/posts/${id}/reactions${force ? '?refresh=1' : ''}`)) }; }
+    catch (err) { box.innerHTML = `<div class="ig-note">답글을 불러오지 못했어요: ${esc(err.message)}</div>`; return; }
+    if (igcData.removed?.length) { removedToast(igcData.removed); igcData.removed = []; state.post = igcData.post; return renderPostView(); }
   }
   const el = document.getElementById('igc');
   if (!el || state.post?.id !== id) return;
-  const list = igcData.comments || [];
-  const all = igOpen.has(id);
-  el.innerHTML = `<div class="week-head" style="margin-bottom:2px"><b style="font-size:14px">💬 인스타그램 댓글 ${nf(igcData.counts?.comments ?? list.length)}개</b></div>
-    ${igcData.errors?.comments ? `<div class="ig-note">${esc(igcData.errors.comments)}</div>`
-      : list.length ? (all ? list : list.slice(0, 5)).map(igCommentHtml).join('') + (list.length > 5 ? `<button class="btn ghost" data-igc-more>${all ? '접기' : `댓글 ${list.length - 5}개 더 보기`}</button>` : '')
-      : '<div class="hint" style="padding:6px 0">아직 댓글이 없어요.</div>'}`;
+  el.innerHTML = PLATFORMS.filter((pf) => igcData.platforms?.[pf.id]).map((pf) => platformBlock(id, pf.id, igcData.platforms[pf.id], 5)).join('');
 }
 $app.addEventListener('click', (e) => {
-  if (!e.target.closest('[data-igc-more]') || !state.post) return;
-  const id = state.post.id;
-  igOpen.has(id) ? igOpen.delete(id) : igOpen.add(id);
+  const b = e.target.closest('[data-rc-more]');
+  if (!b || state.view !== 'post') return;
+  const k = b.dataset.rcMore;
+  igOpen.has(k) ? igOpen.delete(k) : igOpen.add(k);
   loadPostComments();
 });
 
@@ -1044,6 +1044,7 @@ $app.addEventListener('click', async (e) => {
         const { post, errors } = await api('POST', `/api/posts/${state.post.id}/metrics`);
         igcData = null;
         await refreshPost(post);
+        await loadPostComments(true);
         const errs = Object.entries(errors);
         if (errs.length) alertBox(errs.map(([k, v]) => `${PF[k].name}: ${v}`).join('\n\n'));
         else toast('반응을 새로 불러왔어요.');

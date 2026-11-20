@@ -272,75 +272,100 @@ async function deletePublication(platform, conns, pub) {
   throw new Error('알 수 없는 플랫폼');
 }
 
-// ---------- 반응(좋아요·댓글 등) ----------
-async function fetchMetrics(platform, conns, pub) {
+// ---------- 반응: 모든 플랫폼에서 '좋아요'와 '답글' 두 가지만 ----------
+// 권한 부족(10, 200)은 어떤 권한이 필요한지 알려 준다
+function permHint(e, perm) {
+  if (e && !e.gone && /권한|permission/i.test(e.message)) return `${perm} 권한이 필요해요. 토큰을 만들 때 ${perm}을 체크했는지 확인해 주세요.`;
+  return e?.message || '불러오지 못했어요.';
+}
+const NEED = {
+  instagram: { comments: 'instagram_manage_comments' },
+  facebook: { counts: 'pages_read_engagement', comments: 'pages_read_user_content' },
+  threads: { counts: 'threads_manage_insights', comments: 'threads_read_replies' },
+};
+
+// 좋아요·답글 수
+async function fetchCounts(platform, conns, pub) {
   if (platform === 'instagram') {
     const { token } = conns.instagram;
-    const d = await call('GET', `${igBase(token)}/${pub.id}`, { fields: 'like_count,comments_count', access_token: token });
-    return { 좋아요: d.like_count ?? 0, 댓글: d.comments_count ?? 0 };
+    const d = await call('GET', `${igBase(token)}/${pub.id}`, { fields: 'like_count,comments_count,permalink', access_token: token });
+    return { likes: d.like_count ?? 0, comments: d.comments_count ?? 0, permalink: d.permalink || '' };
   }
   if (platform === 'facebook') {
     const d = await call('GET', `${FB()}/${VER()}/${pub.id}`, {
-      fields: 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),shares',
+      fields: 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0),permalink_url',
       access_token: conns.facebook.token,
     });
-    return { 반응: d.reactions?.summary?.total_count ?? 0, 댓글: d.comments?.summary?.total_count ?? 0, 공유: d.shares?.count ?? 0 };
+    return { likes: d.reactions?.summary?.total_count ?? 0, comments: d.comments?.summary?.total_count ?? 0, permalink: d.permalink_url || '' };
   }
   if (platform === 'threads') {
-    try {
-      const d = await call('GET', `${TH()}/v1.0/${pub.id}/insights`, { metric: 'views,likes,replies,reposts', access_token: conns.threads.token });
-      const m = {};
-      const names = { views: '조회', likes: '좋아요', replies: '답글', reposts: '리포스트' };
-      for (const item of d.data || []) m[names[item.name] || item.name] = item.values?.[0]?.value ?? item.total_value?.value ?? 0;
-      return m;
-    } catch (e) {
-      throw new Error(`스레드 반응을 보려면 threads_manage_insights 권한이 필요해요. (${e.message})`);
-    }
+    const d = await call('GET', `${TH()}/v1.0/${pub.id}/insights`, { metric: 'likes,replies', access_token: conns.threads.token });
+    const m = {};
+    for (const it of d.data || []) m[it.name] = it.values?.[0]?.value ?? it.total_value?.value ?? 0;
+    return { likes: m.likes ?? 0, comments: m.replies ?? 0, permalink: '' };
   }
   throw new Error('알 수 없는 플랫폼');
 }
 
-// ---------- 인스타그램 반응 화면: 좋아요·댓글 수, 인사이트, 댓글 내용 ----------
-// 권한 부족(10, 200)은 어떤 권한이 필요한지 알려 준다
-function permHint(e, perm) {
-  if (e && e.status !== 404 && /권한|permission/i.test(e.message)) return `${perm} 권한이 필요해요. 토큰을 만들 때 ${perm}을 체크했는지 확인해 주세요.`;
-  return e?.message || '불러오지 못했어요.';
-}
-
-async function igReactions(conns, pub) {
-  const { token } = conns.instagram || {};
-  if (!token) throw new Error('인스타그램이 연결되지 않았어요.');
-  const base = igBase(token);
-  const out = { counts: null, insights: null, comments: [], errors: {} };
-
-  // 1) 좋아요·댓글 수 (기본 권한)
-  const d = await call('GET', `${base}/${pub.id}`, { fields: 'like_count,comments_count,permalink,timestamp', access_token: token });
-  out.counts = { likes: d.like_count ?? 0, comments: d.comments_count ?? 0 };
-  out.permalink = d.permalink || pub.url || '';
-
-  // 2) 조회수·도달·저장·공유 (instagram_manage_insights). 반영까지 최대 48시간 걸릴 수 있음
-  try {
-    const ins = await call('GET', `${base}/${pub.id}/insights`, { metric: 'views,reach,saved,shares', access_token: token });
-    const m = {};
-    for (const it of ins.data || []) m[it.name] = it.values?.[0]?.value ?? it.total_value?.value ?? 0;
-    out.insights = m;
-  } catch (e) {
-    out.errors.insights = permHint(e, 'instagram_manage_insights');
-  }
-
-  // 3) 댓글 내용 (instagram_manage_comments). 최신 50개, 답글 포함
-  try {
-    const c = await call('GET', `${base}/${pub.id}/comments`, {
-      fields: 'id,text,username,timestamp,like_count,replies{id,text,username,timestamp}',
-      limit: '50', access_token: token,
+// 답글(댓글) 내용 최신 50개 + 그 아래 답글
+async function fetchComments(platform, conns, pub) {
+  if (platform === 'instagram') {
+    const { token } = conns.instagram;
+    const c = await call('GET', `${igBase(token)}/${pub.id}/comments`, {
+      fields: 'id,text,username,timestamp,like_count,replies{id,text,username,timestamp}', limit: '50', access_token: token,
     });
-    out.comments = (c.data || []).map((x) => ({
+    return (c.data || []).map((x) => ({
       id: x.id, text: x.text || '', username: x.username || '', at: x.timestamp || '', likes: x.like_count ?? 0,
       replies: (x.replies?.data || []).map((r) => ({ id: r.id, text: r.text || '', username: r.username || '', at: r.timestamp || '' })),
     }));
-  } catch (e) {
-    out.errors.comments = permHint(e, 'instagram_manage_comments');
   }
+  if (platform === 'facebook') {
+    const c = await call('GET', `${FB()}/${VER()}/${pub.id}/comments`, {
+      fields: 'id,message,from{name},created_time,like_count,comments.limit(20){id,message,from{name},created_time}',
+      order: 'reverse_chronological', filter: 'toplevel', limit: '50', access_token: conns.facebook.token,
+    });
+    return (c.data || []).map((x) => ({
+      id: x.id, text: x.message || '', username: x.from?.name || 'Facebook 사용자', at: x.created_time || '', likes: x.like_count ?? 0,
+      replies: (x.comments?.data || []).map((r) => ({ id: r.id, text: r.message || '', username: r.from?.name || 'Facebook 사용자', at: r.created_time || '' })),
+    }));
+  }
+  if (platform === 'threads') {
+    const c = await call('GET', `${TH()}/v1.0/${pub.id}/replies`, { fields: 'id,text,username,timestamp', access_token: conns.threads.token });
+    return (c.data || []).map((x) => ({ id: x.id, text: x.text || '', username: x.username || '', at: x.timestamp || '', likes: 0, replies: [] }));
+  }
+  throw new Error('알 수 없는 플랫폼');
+}
+
+// 반응 새로고침용 (게시 현황 칩): 좋아요·답글만
+async function fetchMetrics(platform, conns, pub) {
+  try {
+    const c = await fetchCounts(platform, conns, pub);
+    return { 좋아요: c.likes, 답글: c.comments };
+  } catch (e) {
+    if (e.gone) throw e;
+    throw new Error(permHint(e, NEED[platform]?.counts || '읽기'));
+  }
+}
+
+// 반응 화면·게시물 화면용: 수 + 답글 내용
+async function reactions(platform, conns, pub) {
+  if (!conns[platform]?.token) throw new Error('계정이 연결되지 않았어요.');
+  const out = { counts: null, comments: [], errors: {}, permalink: pub.url || '' };
+  try {
+    const c = await fetchCounts(platform, conns, pub);
+    out.counts = { likes: c.likes, comments: c.comments };
+    if (c.permalink) out.permalink = c.permalink;
+  } catch (e) {
+    if (e.gone) throw e; // 지워진 게시물은 부른 쪽에서 정리
+    out.errors.counts = permHint(e, NEED[platform]?.counts || '읽기');
+  }
+  try {
+    out.comments = await fetchComments(platform, conns, pub);
+  } catch (e) {
+    if (e.gone) throw e;
+    out.errors.comments = permHint(e, NEED[platform]?.comments || '답글 읽기');
+  }
+  if (!out.counts && !out.errors.comments) out.counts = { likes: 0, comments: out.comments.length };
   return out;
 }
 
@@ -365,4 +390,4 @@ async function publish(platform, conns, text, photos) {
   throw new Error('알 수 없는 플랫폼');
 }
 
-module.exports = { publish, testConnection, deletePublication, fetchMetrics, exists, igReactions };
+module.exports = { publish, testConnection, deletePublication, fetchMetrics, exists, reactions };

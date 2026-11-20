@@ -5,7 +5,7 @@ const express = require('express');
 const db = require('./db');
 const llm = require('./llm');
 const connections = require('./connections');
-const { publish, testConnection, deletePublication, fetchMetrics, exists, igReactions } = require('./publish');
+const { publish, testConnection, deletePublication, fetchMetrics, exists, reactions } = require('./publish');
 
 db.load();
 connections.load();
@@ -147,58 +147,61 @@ app.post('/api/stores/:id/sync', wrap(async (req, res) => {
   res.json({ removed });
 }));
 
-// ---------- 인스타그램 반응 화면 ----------
-// 인스타에 올린 게시물마다 좋아요·댓글 수, 조회수 등, 댓글 내용을 모아서 돌려준다 (같은 게시물은 30초 동안 캐시)
-const reactCache = new Map();
-app.get('/api/stores/:id/instagram', wrap(async (req, res) => {
-  const store = needStore(req, res);
-  if (!store) return;
+// ---------- 반응 화면 (인스타·페이스북·스레드): 좋아요·답글 수 + 답글 내용 ----------
+const reactCache = new Map(); // 같은 게시물은 30초 동안 다시 묻지 않음
+async function postReactions(post, { fresh = false } = {}) {
   const conns = connections.get();
-  if (!conns.instagram?.token) return res.json({ connected: false, items: [] });
-  const fresh = req.query.refresh === '1';
-  const items = [];
+  const platforms = {};
   const removed = [];
-  for (const post of db.listPosts(store.id)) {
-    const pub = post.publications?.instagram;
-    if (!pub || pub.status !== 'published') continue;
+  for (const [platform, pub] of Object.entries(post.publications || {})) {
+    if (pub.status !== 'published' || !PLATFORM_NAMES[platform]) continue;
+    const key = `${platform}:${pub.id}`;
+    const hit = reactCache.get(key);
     let data;
-    const hit = reactCache.get(pub.id);
     if (!fresh && hit && Date.now() - hit.at < 30000) data = hit.data;
     else {
       try {
-        data = await igReactions(conns, pub);
-        reactCache.set(pub.id, { at: Date.now(), data });
+        data = await reactions(platform, conns, pub);
+        reactCache.set(key, { at: Date.now(), data });
       } catch (e) {
-        if (e.gone) { // 인스타 앱에서 지운 게시물
-          post.publications.instagram = { ...pub, status: 'deleted', deletedAt: db.now(), deletedBy: 'sns' };
+        if (e.gone) { // SNS 앱에서 지운 게시물
+          post.publications[platform] = { ...pub, status: 'deleted', deletedAt: db.now(), deletedBy: 'sns' };
           db.updatePost(post.id, {});
-          removed.push({ postId: post.id, topic: post.topic, platform: 'instagram', name: PLATFORM_NAMES.instagram });
+          removed.push({ postId: post.id, topic: post.topic, platform, name: PLATFORM_NAMES[platform] });
           continue;
         }
         data = { error: e.message };
       }
     }
+    platforms[platform] = { ...data, url: pub.url, at: pub.at };
+  }
+  return { platforms, removed };
+}
+
+app.get('/api/stores/:id/reactions', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const items = [];
+  const removed = [];
+  for (const post of db.listPosts(store.id)) {
+    if (!Object.values(post.publications || {}).some((p) => p.status === 'published')) continue;
+    const r = await postReactions(post, { fresh: req.query.refresh === '1' });
+    removed.push(...r.removed);
+    if (!Object.keys(r.platforms).length) continue;
     const cover = post.images.find((i) => i.id === post.selectedImageIds[0]) || post.images[0];
-    items.push({ postId: post.id, topic: post.topic, caption: post.captions?.instagram || '', at: pub.at, url: pub.url,
-      cover: cover ? `/uploads/${cover.file}` : '', ...data });
+    const at = Object.values(r.platforms).map((x) => x.at).sort().pop();
+    items.push({ postId: post.id, topic: post.topic, at, cover: cover ? `/uploads/${cover.file}` : '', platforms: r.platforms });
   }
   items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
-  res.json({ connected: true, items, removed, fetchedAt: db.now() });
+  res.json({ items, removed, fetchedAt: db.now() });
 }));
 
-// 게시물 한 개의 인스타 반응 (게시물 화면용)
-app.get('/api/posts/:postId/instagram', wrap(async (req, res) => {
+// 게시물 한 개의 반응 (게시물 화면용)
+app.get('/api/posts/:postId/reactions', wrap(async (req, res) => {
   const post = needPost(req, res);
   if (!post) return;
-  const pub = post.publications?.instagram;
-  if (!pub || pub.status !== 'published') return res.status(400).json({ error: '인스타그램에 올라간 게시물이 아니에요.' });
-  try {
-    const data = await igReactions(connections.get(), pub);
-    reactCache.set(pub.id, { at: Date.now(), data });
-    res.json(data);
-  } catch (e) {
-    res.status(400).json({ error: e.message, gone: !!e.gone });
-  }
+  const r = await postReactions(post, { fresh: req.query.refresh === '1' });
+  res.json({ ...r, post: withStatus(post) });
 }));
 
 app.post('/api/posts/:postId/sync', wrap(async (req, res) => {
