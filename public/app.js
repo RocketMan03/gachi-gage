@@ -12,7 +12,7 @@ const state = {
   connections: {},
   capTab: 'instagram',
   filter: 'all',
-  newDraft: { topic: '', detail: '', tone: '친근하게', style: 'magazine', files: [] }, // 새 게시물 입력 중인 내용
+  newDraft: { topic: '', detail: '', tone: '친근하게', layout: 'magazine', effect: 'none', files: [] }, // 새 게시물 입력 중인 내용
 };
 
 const PLATFORMS = [
@@ -326,10 +326,13 @@ function renderNew() {
       <label>분위기</label>
       <div class="chips" id="toneChips">${tones.map((t) => `<button class="chip ${d.tone === t ? 'on' : ''}" data-tone="${esc(t)}">${esc(t)}</button>`).join('')}</div>
 
-      <label>스타일 <span class="hint">(홍보 카드에 들어갈 편집 효과 · 사진이 있어야 적용돼요)</span></label>
-      <div class="style-grid" id="styleChips">${Imaging.STYLES.map((st) => `<button type="button" class="style-opt ${d.style === st.id ? 'on' : ''}" data-style="${st.id}" aria-pressed="${d.style === st.id}"><span class="style-ic">${st.icon}</span><strong>${esc(st.name)}</strong><span class="hint">${esc(st.desc)}</span></button>`).join('')}</div>
+      <label>카드 스타일 <span class="hint">(글자 배치)</span></label>
+      <div class="chips" id="layoutChips">${Object.entries(Imaging.LAYOUT_NAMES).map(([k, l]) => `<button type="button" class="chip ${d.layout === k ? 'on' : ''}" data-layout="${k}" aria-pressed="${d.layout === k}">${esc(l)}</button>`).join('')}</div>
+      <label>편집 효과</label>
+      <div class="chips" id="effectChips">${Object.entries(Imaging.EFFECT_NAMES).map(([k, l]) => `<button type="button" class="chip ${d.effect === k ? 'on' : ''}" data-effect="${k}" aria-pressed="${d.effect === k}">${esc(l)}</button>`).join('')}</div>
+      <p class="hint" style="margin:6px 0 0">AI가 이 스타일·효과에 맞는 카드 문구 5개를 만들어 보여 드려요. 그중 하나를 고르면 돼요.</p>
 
-      <label>참고 사진 <span class="hint">(선택 · 최대 10장 · AI가 사진을 보고 문구를 써요)</span></label>
+      <label>참고 사진 <span class="hint">(선택 · 최대 10장 · 카드는 사진이 있어야 스타일이 적용돼요)</span></label>
       <div class="thumbs" id="refThumbs">${d.files.map((f, i) => `<div class="thumb"><img src="${URL.createObjectURL(f)}" alt="" /><button class="thumb-del" data-del-ref="${i}" aria-label="삭제">×</button></div>`).join('')}</div>
       <div class="row">
         <button class="btn line" data-action="ref-camera">📸 카메라로 찍기</button>
@@ -354,7 +357,7 @@ async function createPost() {
   loading('AI가 게시물을 만들고 있어요…', steps);
   document.querySelector('[data-step="0"]')?.classList.add('now');
   try {
-    let post = await api('POST', `/api/stores/${state.storeId}/posts`, { topic: d.topic, detail: d.detail, tone: d.tone, style: d.style });
+    let post = await api('POST', `/api/stores/${state.storeId}/posts`, { topic: d.topic, detail: d.detail, tone: d.tone, layout: d.layout, effect: d.effect });
     stepDone(0);
     for (const f of d.files) {
       const c = await Imaging.fitInsta(f);
@@ -367,24 +370,73 @@ async function createPost() {
     const enhancedBlobs = [];
     for (const r of refs) enhancedBlobs.push({ ref: r, blob: await Imaging.toJpeg(await Imaging.enhance(imgUrl(r), 'auto')) });
     stepDone(3);
-    // 표지: 고른 스타일의 홍보 카드(슬라이드는 2장) → 그다음 보정 사진들
-    const cardText = { headline: post.headline || d.topic, subline: post.subline, tag: post.tag, storeName: state.store.name, category: state.store.category };
-    const tpl = !enhancedBlobs.length ? 'text' : d.style === 'slide' ? 'slide' : (Imaging.TEMPLATES[d.style] ? d.style : 'bottom');
-    const cards = tpl === 'slide'
-      ? await Imaging.makeSlides({ photos: enhancedBlobs.map((e) => e.blob), ...cardText })
-      : [await Imaging.makeCard({ photo: enhancedBlobs[0]?.blob || null, template: tpl, ...cardText })];
-    for (const card of cards) post = await uploadImage(post.id, await Imaging.toJpeg(card), { kind: 'card', source: enhancedBlobs[0]?.ref.id, label: tpl, select: true });
+    // 표지: 고른 스타일·편집 효과로 AI 카드 문구 5개를 그려 보여 주고, 고른 것으로 홍보 카드(슬라이드는 2장) → 그다음 보정 사진들
+    const combo = enhancedBlobs.length ? { layout: d.layout, effect: d.effect } : { layout: 'text', effect: 'none' };
+    const base = { storeName: state.store.name, category: state.store.category };
+    const photos = enhancedBlobs.map((e) => e.blob);
+    const options = post.cardOptions?.length ? post.cardOptions : [{ headline: post.headline || d.topic, subline: post.subline, tag: post.tag }];
+    const text = { ...base, ...(await pickCardText(options, combo, base, photos)) };
+    post = await api('PUT', `/api/posts/${post.id}`, { headline: text.headline, subline: text.subline, tag: text.tag });
+    loading('홍보 카드를 만들고 있어요…', steps);
+    for (let i = 0; i < 4; i++) stepDone(i);
+    const cards = await renderCombo(combo, text, photos);
+    for (const card of cards) post = await uploadImage(post.id, await Imaging.toJpeg(card), { kind: 'card', source: enhancedBlobs[0]?.ref.id, label: `${combo.layout}+${combo.effect}`, select: true });
     for (const e of enhancedBlobs) post = await uploadImage(post.id, e.blob, { kind: 'enhanced', source: e.ref.id, label: 'auto', select: true });
     stepDone(4);
     // 연결된 플랫폼을 기본으로 체크
     const pfs = PLATFORMS.filter((p) => state.connections[p.id]?.connected).map((p) => p.id);
     post = await api('PUT', `/api/posts/${post.id}`, { platforms: pfs });
-    state.newDraft = { topic: '', detail: '', tone: d.tone, style: d.style, files: [] };
+    state.newDraft = { topic: '', detail: '', tone: d.tone, layout: d.layout, effect: d.effect, files: [] };
     setView('post', { postId: post.id, post, capTab: 'instagram' });
   } catch (err) {
     toast(err.message);
     renderNew();
   }
+}
+
+// ---------- 카드 문구 고르기 (고른 스타일·효과로 AI 문구 5개 미리보기) ----------
+const comboName = (c) => c.layout === 'text' ? '글자만' : `${Imaging.LAYOUT_NAMES[c.layout]} + ${Imaging.EFFECT_NAMES[c.effect]}`;
+function renderCombo(c, text, photos) {
+  return c.layout === 'slide'
+    ? Imaging.makeSlides({ photos, effect: c.effect, ...text })
+    : Imaging.makeCard({ photo: photos[0] || null, template: c.layout, effect: c.effect, ...text }).then((x) => [x]);
+}
+// 화면 크기 미리보기 이미지 (원본 1080px 대신 작은 그림)
+function thumbUrl(canvas) {
+  const t = document.createElement('canvas');
+  t.width = 360; t.height = Math.round((360 * canvas.height) / canvas.width);
+  t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', 0.85);
+}
+function pickCardText(options, combo, base, photos) {
+  return new Promise((resolve) => {
+    let sel = 0;
+    $app.innerHTML = `
+      <h1>카드 문구 고르기</h1>
+      <p class="lead">${esc(comboName(combo))} 스타일로 AI가 쓴 문구 ${options.length}개예요. 마음에 드는 걸 골라 주세요. 고른 뒤에도 글자는 고칠 수 있어요.</p>
+      <div class="pick-grid">${options.map((o, i) => `<button type="button" class="pick ${i === 0 ? 'on' : ''}" data-pick="${i}" aria-pressed="${i === 0}"><div class="pick-img"><div class="spinner"></div></div><span>${esc(o.headline)}</span></button>`).join('')}</div>
+      <div class="row"><button class="btn primary block" data-pk="ok">이 문구로 만들기</button></div>`;
+    const onClick = (e) => {
+      const b = e.target.closest('[data-pick],[data-pk]');
+      if (!b) return;
+      if (b.dataset.pick) {
+        sel = Number(b.dataset.pick);
+        $app.querySelectorAll('[data-pick]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+      } else {
+        $app.removeEventListener('click', onClick);
+        resolve(options[sel]);
+      }
+    };
+    $app.addEventListener('click', onClick);
+    window.scrollTo(0, 0);
+    (async () => {
+      for (const [i, o] of options.entries()) {
+        const cards = await renderCombo(combo, { ...base, ...o }, photos);
+        const box = $app.querySelector(`[data-pick="${i}"] .pick-img`);
+        if (box) box.innerHTML = `<img src="${thumbUrl(cards[0])}" alt="${esc(o.headline)} 카드 미리보기" />${cards.length > 1 ? `<i class="pick-badge">${cards.length}장</i>` : ''}`;
+      }
+    })();
+  });
 }
 
 // ---------- 게시물 화면: 미리보기·편집·게시·관리 ----------
@@ -583,18 +635,24 @@ function openTools(imgId) {
 async function openCardMaker(photoImg, template) {
   const post = state.post;
   const photo = photoImg || selectedImages(post).find((i) => i.kind !== 'card') || post.images.find((i) => i.kind !== 'card');
-  let tpl = template || (!photo ? 'text' : Imaging.TEMPLATES[post.style] ? post.style : 'bottom');
+  let tpl = template || (!photo ? 'text' : Imaging.TEMPLATES[post.layout] ? post.layout : 'magazine');
+  let effect = photo && Imaging.EFFECT_NAMES[post.effect] ? post.effect : 'none';
   const m = modal(`
     <div class="fact-title" style="margin-top:0">🎨 홍보 카드 만들기</div>
     <canvas id="cardCanvas" class="tool-preview"></canvas>
     <label>큰 제목</label><input id="cardHead" value="${esc(post.headline || post.topic)}" maxlength="20" />
     <label>작은 글</label><input id="cardSub" value="${esc(post.subline || '')}" maxlength="30" />
-    <div class="chips" style="margin-top:10px">${Object.entries(Imaging.TEMPLATES).map(([k, l]) => `<button class="chip ${k === tpl ? 'on' : ''}" data-tpl="${k}" ${!photo && k !== 'text' ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+    <label>스타일</label>
+    <div class="chips">${Object.entries(Imaging.TEMPLATES).map(([k, l]) => `<button class="chip ${k === tpl ? 'on' : ''}" data-tpl="${k}" ${!photo && k !== 'text' ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+    <label>편집 효과</label>
+    <div class="chips">${Object.entries(Imaging.EFFECT_NAMES).map(([k, l]) => `<button class="chip ${k === effect ? 'on' : ''}" data-fx="${k}" ${!photo ? 'disabled' : ''}>${l}</button>`).join('')}</div>
     <div class="chips">${['#e8590c', '#2f9e44', '#1c7ed6', '#c2255c', '#343a40'].map((c) => `<button class="swatch" data-color="${c}" style="background:${c}" aria-label="색상"></button>`).join('')}</div>
     <div class="row"><button class="btn primary" data-m="add">카드 추가하기</button><button class="btn line" data-m="close">취소</button></div>`,
     async (e, close) => {
       const tb = e.target.closest('[data-tpl]');
       const cb = e.target.closest('[data-color]');
+      const fb = e.target.closest('[data-fx]');
+      if (fb && !fb.disabled) { effect = fb.dataset.fx; m.el.querySelectorAll('[data-fx]').forEach((b) => b.classList.toggle('on', b === fb)); draw(); }
       if (tb && !tb.disabled) { tpl = tb.dataset.tpl; m.el.querySelectorAll('[data-tpl]').forEach((b) => b.classList.toggle('on', b === tb)); draw(); }
       if (cb) { color = cb.dataset.color; draw(); }
       if (e.target.closest('[data-m=add]')) {
@@ -604,7 +662,7 @@ async function openCardMaker(photoImg, template) {
           const headline = m.el.querySelector('#cardHead').value;
           const subline = m.el.querySelector('#cardSub').value;
           await api('PUT', `/api/posts/${post.id}`, {});
-          let p = await uploadImage(post.id, await Imaging.toJpeg(canvas), { kind: 'card', source: photo?.id, label: tpl, select: true });
+          let p = await uploadImage(post.id, await Imaging.toJpeg(canvas), { kind: 'card', source: photo?.id, label: `${tpl}+${effect}`, select: true });
           // 새 카드를 표지(1번)로
           const ids = [p.images[p.images.length - 1].id, ...p.selectedImageIds.filter((x) => x !== p.images[p.images.length - 1].id)];
           p = await api('PUT', `/api/posts/${post.id}`, { selectedImageIds: ids });
@@ -623,6 +681,7 @@ async function openCardMaker(photoImg, template) {
     category: state.store?.category || '',
     tag: post.tag || '',
     template: tpl,
+    effect,
     color,
   });
   const draw = async () => {
@@ -713,9 +772,10 @@ $app.addEventListener('click', async (e) => {
       document.querySelectorAll('[data-topic]').forEach((c) => c.classList.toggle('on', c === el));
       return;
     }
-    if ((el = t('[data-style]'))) {
-      state.newDraft.style = el.dataset.style;
-      document.querySelectorAll('[data-style]').forEach((c) => { c.classList.toggle('on', c === el); c.setAttribute('aria-pressed', c === el); });
+    if ((el = t('[data-layout],[data-effect]'))) {
+      const key = el.dataset.layout ? 'layout' : 'effect';
+      state.newDraft[key] = el.dataset[key];
+      document.querySelectorAll(`[data-${key}]`).forEach((c) => { c.classList.toggle('on', c === el); c.setAttribute('aria-pressed', c === el); });
       return;
     }
     if ((el = t('[data-tone]'))) {

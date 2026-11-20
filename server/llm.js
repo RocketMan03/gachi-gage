@@ -76,6 +76,12 @@ async function geminiRequest(kind, body) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90000), // 응답이 없으면 무한 대기 대신 실패 → 예시 문구로 대체
+    }).catch((e) => {
+      if (e.name !== 'TimeoutError') throw e;
+      const err = new Error(`Gemini 응답 없음 90초 (${model})`);
+      err.status = 408; // 상태가 있으면 askJson이 또 90초 재시도하지 않음
+      throw err;
     });
     if (!res.ok) {
       const text = await res.text();
@@ -187,12 +193,22 @@ function fitThreads(text) {
   return t.length > 500 ? `${t.slice(0, 497)}…` : t;
 }
 
+// 카드 문구 후보 5개 (모자라면 예시 문구로 채움, 같은 제목은 하나만)
+function cardOptions(list, raw, fallback) {
+  const cut = (o, d) => ({ headline: str(o?.headline, d.headline).slice(0, 20), subline: str(o?.subline, d.subline).slice(0, 30), tag: str(o?.tag, d.tag).slice(0, 12) });
+  const first = cut(raw, fallback);
+  const out = [first, ...(Array.isArray(list) ? list : []).map((o) => cut(o, first)), ...fallback.cardOptions];
+  const seen = new Set();
+  return out.filter((o) => !seen.has(o.headline) && seen.add(o.headline)).slice(0, 5);
+}
+
 function normalizePost(raw, fallback) {
   const c = raw?.captions || {};
   return {
     headline: str(raw?.headline, fallback.headline).slice(0, 20),
     subline: str(raw?.subline, fallback.subline).slice(0, 30),
     tag: str(raw?.tag, fallback.tag).slice(0, 12),
+    cardOptions: cardOptions(raw?.cardOptions, raw, fallback),
     captions: {
       instagram: str(c.instagram, fallback.captions.instagram).slice(0, 2200),
       facebook: str(c.facebook, fallback.captions.facebook),

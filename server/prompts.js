@@ -39,7 +39,8 @@ const POST_SYSTEM = `너는 마케팅 담당자가 없는 소상공인 사장님
    - threads: 2~4줄, 대화하듯 짧게, 전체 450자 이내, 해시태그는 최대 1개
 5. headline은 홍보 카드 이미지에 크게 들어갈 제목(공백 포함 14자 이내), subline은 그 아래 작은 글(24자 이내).
 6. tag는 카드 위쪽 작은 카테고리 태그(공백 포함 10자 이내, 예: "맛집 추천", "신메뉴 소개").
-7. [카드 스타일]에 맞춰 headline·subline의 말투와 내용을 정한다.
+7. [카드 스타일]과 [편집 효과]에 맞춰 headline·subline의 말투와 내용을 정한다.
+   cardOptions에는 서로 확실히 다른 카드 문구 후보 5개를 넣는다 (각도·말투·강조점을 다르게: 질문형, 감탄형, 혜택 강조, 상황 묘사, 짧은 한마디 등). 첫 번째 후보는 headline·subline·tag와 같게.
 8. imagePrompt는 AI 이미지 생성 모델에 줄 영어 프롬프트. 글자(텍스트)가 들어가지 않는 사진풍 장면으로 묘사한다.
 
 반드시 아래 JSON 형식으로만 답한다.
@@ -47,6 +48,7 @@ const POST_SYSTEM = `너는 마케팅 담당자가 없는 소상공인 사장님
   "headline": "카드 큰 제목",
   "subline": "카드 작은 글",
   "tag": "카테고리 태그",
+  "cardOptions": [ { "headline": "...", "subline": "...", "tag": "..." } ],
   "captions": {
     "instagram": "인스타그램 문구 전체 (해시태그 포함, 줄바꿈은 \\n)",
     "facebook": "페이스북 문구 전체",
@@ -56,15 +58,21 @@ const POST_SYSTEM = `너는 마케팅 담당자가 없는 소상공인 사장님
   "imagePrompt": "English prompt for an image model"
 }`;
 
-// 홍보 카드 스타일별 문구 요령 (참고: 인스타 '피드 사꾸' 스타일)
+// 홍보 카드 스타일(글자 배치)별 문구 요령 (참고: 인스타 '피드 사꾸' 스타일)
 const STYLE_GUIDE = {
-  magazine: '매거진 표지형. headline은 친구에게 말 걸듯 짧은 구어체 2줄 이내(예: "우리도 여기 갈래?", "다 알려주겠어!"). 클릭하고 싶게.',
-  shapes: '굵은 문구 + 포인트 도형. headline은 굵게 보일 짧은 한 구절, subline은 상황 설명 한마디.',
-  doodle: '손그림 드로잉. headline은 귀엽고 가벼운 구어체, subline은 사진 속 장면을 한 줄로.',
-  sparkle: '반짝이 하이라이트. headline은 사진 속 상품을 콕 집어 자랑하는 구어체, subline은 특징 한 줄.',
-  sticker: '스티커 콜라주. subline은 말풍선에 들어갈 감탄 한마디(예: "이거 진짜 맛있어!"), headline은 짧은 제목.',
-  slide: '옆으로 넘기는 슬라이드 피드. headline은 이어지는 이야기의 시작, subline은 다음 장이 궁금하게.',
-  bottom: '기본 카드. headline은 상품·혜택을 바로 알 수 있게, subline은 가격·기간 등 정보.',
+  magazine: '매거진 표지형: 위에 작은 카테고리 태그, 굵은 흰 글씨 2줄. headline은 친구에게 말 걸듯 짧은 구어체(예: "우리도 여기 갈래?", "다 알려주겠어!"). 클릭하고 싶게.',
+  caption: '캡션 박스형: 검은 박스 안 제목 + 아래 설명. headline은 짧은 소제목, subline은 무엇을 보면 되는지 한 줄 설명.',
+  bottom: '사진 + 아래 글: headline은 상품·혜택을 바로 알 수 있게, subline은 가격·기간 등 정보.',
+  frame: '포스터형: 사진 아래 큰 제목. headline은 포스터 문구처럼 또렷하게, subline은 정보 한 줄.',
+  slide: '옆으로 넘기는 슬라이드 피드: headline은 이어지는 이야기의 시작, subline은 다음 장이 궁금하게("넘겨 보세요" 느낌).',
+};
+// 편집 효과별 문구 분위기
+const EFFECT_GUIDE = {
+  none: '효과 없음: 깔끔하게.',
+  shapes: '문구·도형(핑크·민트 별): 발랄하고 톡톡 튀게.',
+  doodle: '손그림 드로잉: 귀엽고 가벼운 구어체.',
+  sparkle: '반짝 하이라이트: 사진 속 상품을 콕 집어 자랑하듯.',
+  sticker: '스티커 콜라주: 감탄사나 의성어를 섞어 신나게(예: "이거 진짜 맛있어!").',
 };
 
 function buildPostPrompt(store, input, refCount, pastPosts) {
@@ -75,7 +83,8 @@ function buildPostPrompt(store, input, refCount, pastPosts) {
       `[이번에 홍보할 것]\n${input.topic}`,
       `[강조하고 싶은 내용]\n${input.detail || '(없음)'}`,
       `[원하는 분위기]\n${input.tone || '친근하게'}`,
-      `[카드 스타일]\n${STYLE_GUIDE[input.style] || STYLE_GUIDE.bottom}`,
+      `[카드 스타일]\n${STYLE_GUIDE[input.layout] || STYLE_GUIDE.magazine}`,
+      `[편집 효과]\n${EFFECT_GUIDE[input.effect] || EFFECT_GUIDE.none}`,
       `[참고 사진]\n${refCount ? `${refCount}장 첨부 (아래 이미지)` : '없음'}`,
       `[최근 게시물]\n${pastPostsText(pastPosts)}`,
       '위 내용으로 게시물을 만들어 주세요. 최근 게시물과 문구가 너무 비슷하지 않게 해 주세요.',

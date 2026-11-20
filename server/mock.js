@@ -43,6 +43,13 @@ function mockPost(store, input) {
     headline: (p?.name || input.topic).slice(0, 14),
     subline: (event ? '이번 주 [혜택 내용]' : p?.price ? price : name).slice(0, 24),
     tag: `${store.category || '우리 동네'} 추천`.slice(0, 12),
+    cardOptions: [
+      { headline: (p?.name || input.topic).slice(0, 14), subline: (p?.price ? price : name).slice(0, 24), tag: '신상 소개' },
+      { headline: '우리도 여기 갈래?', subline: `${input.topic}`.slice(0, 24), tag: `${town} 추천`.slice(0, 12) },
+      { headline: '이건 꼭 봐야 해!', subline: (input.detail || `${name}의 ${input.topic}`).slice(0, 24), tag: '오늘의 추천' },
+      { headline: event ? '이번 주만 이 혜택' : '요즘 제일 인기', subline: event ? '[혜택 내용]' : `${name}에서 만나요`.slice(0, 24), tag: event ? '이벤트' : '인기 메뉴' },
+      { headline: '다 알려줄게!', subline: `${input.topic} 총정리`.slice(0, 24), tag: '꿀팁' },
+    ],
     captions: { instagram, facebook, threads },
     checklist: ['[대괄호] 빈칸을 실제 내용으로 바꾸기', '가격·기간이 정확한지 확인하기'],
     imagePrompt: `A warm, inviting photo for a small local ${store.category} shop, featuring ${input.topic}, natural light, Korean neighborhood, no text`,

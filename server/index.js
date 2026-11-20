@@ -19,7 +19,8 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '1h' }));
 
 const PLATFORM_NAMES = { instagram: '인스타그램', facebook: '페이스북', threads: '스레드' };
 const TONES = ['친근하게', '깔끔하게 정보 위주로', '이벤트 느낌으로', '감성적으로', '고급스럽게'];
-const STYLES = ['magazine', 'shapes', 'doodle', 'sparkle', 'sticker', 'slide', 'bottom'];
+const LAYOUTS = ['magazine', 'caption', 'bottom', 'frame', 'slide'];
+const EFFECTS = ['none', 'shapes', 'doodle', 'sparkle', 'sticker'];
 const IMAGE_KINDS = ['reference', 'enhanced', 'card', 'ai'];
 
 const wrap = (fn) => (req, res) =>
@@ -120,7 +121,8 @@ app.post('/api/stores/:id/posts', (req, res) => {
   const s = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
   const topic = s(req.body?.topic, 100);
   if (!topic) return res.status(400).json({ error: '무엇을 홍보할지 적어 주세요.' });
-  res.status(201).json(withStatus(db.createPost(store.id, { topic, detail: s(req.body?.detail, 500), tone: s(req.body?.tone, 30), style: STYLES.includes(req.body?.style) ? req.body.style : 'bottom' })));
+  res.status(201).json(withStatus(db.createPost(store.id, { topic, detail: s(req.body?.detail, 500), tone: s(req.body?.tone, 30),
+    layout: LAYOUTS.includes(req.body?.layout) ? req.body.layout : 'magazine', effect: EFFECTS.includes(req.body?.effect) ? req.body.effect : 'none' })));
 });
 
 app.get('/api/posts/:postId', (req, res) => {
@@ -136,6 +138,10 @@ app.put('/api/posts/:postId', (req, res) => {
   if (typeof b.topic === 'string' && b.topic.trim()) data.topic = b.topic.trim().slice(0, 100);
   if (typeof b.detail === 'string') data.detail = b.detail.trim().slice(0, 500);
   if (typeof b.tone === 'string') data.tone = b.tone.slice(0, 30);
+  // 고른 카드 문구 (후보 5개 중 하나)
+  if (typeof b.headline === 'string') data.headline = b.headline.slice(0, 20);
+  if (typeof b.subline === 'string') data.subline = b.subline.slice(0, 30);
+  if (typeof b.tag === 'string') data.tag = b.tag.slice(0, 12);
   if (b.captions && typeof b.captions === 'object') {
     data.captions = { ...post.captions };
     for (const k of Object.keys(PLATFORM_NAMES)) if (typeof b.captions[k] === 'string') data.captions[k] = b.captions[k].slice(0, 3000);
@@ -201,7 +207,7 @@ app.post('/api/posts/:postId/generate', wrap(async (req, res) => {
   const past = db.listPosts(store.id).filter((p) => p.id !== post.id);
   const out = await llm.generatePost(store, post, refs, past);
   res.json(withStatus(db.updatePost(post.id, {
-    headline: out.headline, subline: out.subline, tag: out.tag, captions: out.captions, checklist: out.checklist,
+    headline: out.headline, subline: out.subline, tag: out.tag, cardOptions: out.cardOptions, captions: out.captions, checklist: out.checklist,
     imagePrompt: out.imagePrompt, source: out.source, fallbackReason: out.fallbackReason || null, generatedAt: db.now(),
   })));
 }));
