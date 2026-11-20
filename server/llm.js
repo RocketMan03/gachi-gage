@@ -2,8 +2,8 @@
 // - 게시물 문구: 참고 사진을 Gemini가 직접 보고 작성 (Groq은 글만)
 // - AI 이미지: Gemini 이미지 모델 (무료 키에서는 막혀 있을 수 있음 → 화면에서 안내)
 
-const { buildPostPrompt, buildIdeasPrompt } = require('./prompts');
-const { mockPost, mockIdeas } = require('./mock');
+const { buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt } = require('./prompts');
+const { mockPost, mockIdeas, mockFeedback } = require('./mock');
 
 function providerName() {
   const p = (process.env.LLM_PROVIDER || 'auto').toLowerCase();
@@ -67,56 +67,64 @@ const pickModel = (names, kind) => rankModels(names, kind)[0] || null;
 
 function configuredModel(kind) {
   if (kind === 'image') return resolved.image || process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
-  return resolved.text || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  return resolved.text || process.env.GEMINI_MODEL || 'gemini-3.5-flash'; // 2.5-flash는 새 키에서 404
 }
 
+// 응답 없이 멈추는 모델 (최신 미리보기 모델에서 자주 생김): 서버가 켜져 있는 동안 다시 고르지 않음
+const hanging = new Set();
+
 async function geminiRequest(kind, body) {
+  const wait = kind === 'image' ? 90000 : 40000;
   const send = async (model) => {
     const res = await fetch(`${GEMINI_BASE()}/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(90000), // 응답이 없으면 무한 대기 대신 실패 → 예시 문구로 대체
+      signal: AbortSignal.timeout(wait), // 응답이 없으면 무한 대기 대신 다른 모델로
     }).catch((e) => {
       if (e.name !== 'TimeoutError') throw e;
-      const err = new Error(`Gemini 응답 없음 90초 (${model})`);
-      err.status = 408; // 상태가 있으면 askJson이 또 90초 재시도하지 않음
+      hanging.add(model);
+      const err = new Error(`Gemini 응답 없음 ${wait / 1000}초 (${model})`);
+      err.status = 408; // 상태가 있으면 askJson이 같은 모델로 또 재시도하지 않음
       throw err;
     });
     if (!res.ok) {
       const text = await res.text();
-      const err = new Error(`Gemini ${res.status} (${model}): ${text.slice(0, 300)}`);
+      const err = new Error(res.status === 429
+        ? `Gemini 무료 사용량을 다 썼어요 (${model}). 1분 뒤나 내일 다시 시도하거나, Google AI Studio에서 결제를 연결해 주세요.`
+        : `Gemini ${res.status} (${model}): ${text.slice(0, 300)}`);
       err.status = res.status;
       throw err;
     }
     return res.json();
   };
   const busy = (e) => e.status === 503 || e.status === 500 || e.status === 429;
-  let model = configuredModel(kind);
+  const tryOther = (e) => e.status === 404 || e.status === 408 || busy(e); // 다른 모델로 넘어갈 오류
+  const model = configuredModel(kind);
   try {
     return await send(model);
   } catch (e) {
-    if (e.status !== 404 && !busy(e)) throw e;
+    if (!tryOther(e)) throw e;
     if (busy(e)) {
       // 잠깐 기다렸다가 같은 모델로 한 번 더
       await sleep(1500);
-      try { return await send(model); } catch (e2) { if (!busy(e2)) throw e2; }
+      try { return await send(model); } catch (e2) { if (!tryOther(e2)) throw e2; }
     }
-    // 다른 모델로 순서대로 시도 (404: 모델 없어짐 / 503: 너무 바쁨)
+    // 다른 모델로 순서대로 시도 (404: 모델 없어짐 / 408: 응답 없음 / 503: 너무 바쁨)
     let names;
     try { names = await listModels(); } catch { throw e; }
-    const others = rankModels(names, kind).filter((n) => n !== model).slice(0, 3);
-    // 없어진 모델(404)이면 앞으로는 가장 좋은 모델을 기본으로 (503은 일시적이라 이번 요청만 다른 모델 사용)
-    if (e.status === 404 && others[0]) resolved[kind] = others[0];
+    const others = rankModels(names, kind).filter((n) => n !== model && !hanging.has(n)).slice(0, 4);
     let lastErr = e;
     for (const next of others) {
       try {
         const out = await send(next);
         console.log(`[llm] ${model} 사용 불가(${e.status}) → ${next} 모델로 전환`);
+        // 없어졌거나 멈추는 모델이면 앞으로는 되는 모델을 기본으로 (503은 일시적이라 이번 요청만)
+        if (e.status === 404 || e.status === 408) resolved[kind] = next;
         return out;
       } catch (e3) {
         lastErr = e3;
-        if (e3.status !== 404 && !busy(e3)) throw e3;
+        if (!tryOther(e3)) throw e3;
       }
     }
     throw lastErr;
@@ -251,6 +259,31 @@ async function generateIdeas(store, pastPosts) {
   }
 }
 
+// 게시물 반응 피드백. 선플/악플은 실제 댓글에 있는 문장만 남긴다 (AI가 지어낸 댓글 방지)
+async function generateFeedback(store, data) {
+  const mock = mockFeedback(store, data);
+  if (providerName() === 'mock' || !data.posts.length) return { ...mock, source: 'mock' };
+  const { system, user } = buildFeedbackPrompt(store, data);
+  try {
+    const raw = await askJson(system, user);
+    const real = (t) => t.length >= 2 && data.comments.some((c) => c.text.includes(t)); // AI가 원문 일부만 옮겨도 인정
+    const list = (v) => (Array.isArray(v) ? v : []);
+    const strs = (v) => list(v).map((x) => str(x)).filter(Boolean).slice(0, 6);
+    return {
+      summary: str(raw?.summary, mock.summary),
+      styleInsights: strs(raw?.styleInsights).length ? strs(raw.styleInsights) : mock.styleInsights,
+      positive: list(raw?.positive).filter((x) => real(str(x?.text))).slice(0, 6).map((x) => ({ text: str(x.text), why: str(x.why) })),
+      negative: list(raw?.negative).filter((x) => real(str(x?.text))).slice(0, 6).map((x) => ({ text: str(x.text), why: str(x.why), reply: str(x.reply) })),
+      suggestions: strs(raw?.suggestions).length ? strs(raw.suggestions) : mock.suggestions,
+      source: providerName(),
+    };
+  } catch (e) {
+    console.error('[llm] 피드백 생성 실패:', e.message);
+    if (!allowFallback()) throw e;
+    return { ...mock, source: 'mock', fallbackReason: e.message };
+  }
+}
+
 // AI 이미지 생성/보정. source가 있으면 그 사진을 보정, 없으면 새로 생성.
 async function generateImage({ prompt, source }) {
   if (providerName() !== 'gemini') {
@@ -277,4 +310,4 @@ async function generateImage({ prompt, source }) {
   }
 }
 
-module.exports = { providerName, modelName, generatePost, generateIdeas, generateImage, _pickModel: pickModel };
+module.exports = { providerName, modelName, generatePost, generateIdeas, generateFeedback, generateImage, _pickModel: pickModel };

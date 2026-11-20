@@ -54,7 +54,7 @@
 
 | 기능 | 사용하는 API | 확인 상태 |
 |---|---|---|
-| AI 문구 생성 (참고 사진을 보고 작성) | Gemini `generateContent` (gemini-2.5-flash, 이미지 입력) | mock 서버로 요청·응답 형식 확인 |
+| AI 문구 생성 (참고 사진을 보고 작성) | Gemini `generateContent` (gemini-3.5-flash, 이미지 입력 · 응답 없는 모델은 자동으로 건너뜀) | mock 서버로 요청·응답 형식 확인 |
 | AI 게시물 아이디어 3개 | Gemini | mock 서버로 확인 |
 | AI 이미지 그리기 / AI 보정 | Gemini 이미지 모델 (`gemini-2.5-flash-image`) | mock 서버로 확인 · **무료 키에서는 막혀 있을 가능성이 높음** |
 | 페이스북 페이지 게시 (글 / 사진 1장 / 여러 장) | Graph API `/{page}/feed`, `/{page}/photos` | mock 서버로 확인 |

@@ -107,4 +107,41 @@ function buildIdeasPrompt(store, pastPosts) {
   };
 }
 
-module.exports = { storeToText, buildPostPrompt, buildIdeasPrompt };
+// ---------- AI 피드백: 올린 게시물의 반응을 보고 다음 게시물 조언 ----------
+const FEEDBACK_SYSTEM = `너는 소상공인 사장님의 SNS 담당 코치다. 사장님이 올린 게시물들의 반응(좋아요·답글)과 댓글 내용을 보고, 쉬운 말로 피드백을 준다.
+
+규칙:
+1. 숫자는 주어진 데이터에 있는 것만 쓴다. 지어내지 않는다. 게시물이 적으면(3개 미만) "아직 게시물이 적어 단정하긴 이르다"고 말한다.
+2. styleInsights: 어떤 카드 스타일·편집 효과·분위기·주제가 반응이 좋았고 나빴는지, 점수를 근거로 2~4개.
+3. positive(선플)와 negative(악플·불만·아쉬운 점)는 반드시 [댓글]에 있는 문장을 text에 그대로 옮긴다. 없으면 빈 배열. 질문·단순 태그는 넣지 않는다.
+   negative에는 사장님이 달 수 있는 정중한 답글 예시(reply)를 함께 쓴다.
+4. suggestions: 다음 게시물에 반영할 구체적인 행동 3~5개 (어떤 스타일·효과로, 어떤 주제를, 어떤 문구로, 언제 등).
+5. 사장님을 탓하지 않고 다정하게. 과장하지 않는다.
+
+반드시 아래 JSON 형식으로만 답한다.
+{
+  "summary": "전체 요약 2~3문장",
+  "styleInsights": ["스타일·작업물 분석"],
+  "positive": [ { "text": "댓글 원문", "why": "왜 좋은 반응인지 한 줄" } ],
+  "negative": [ { "text": "댓글 원문", "why": "무엇이 불만인지 한 줄", "reply": "답글 예시" } ],
+  "suggestions": ["다음 게시물에 반영할 것"]
+}`;
+
+function buildFeedbackPrompt(store, data) {
+  const posts = data.posts.map((p, i) => `${i + 1}. "${p.topic}" (${p.at.slice(0, 10)}) 스타일: ${p.style} / 효과: ${p.effect} / 분위기: ${p.tone || '-'} / 올린 곳: ${p.platforms.join(', ')}
+   좋아요 ${p.total.likes}, 답글 ${p.total.comments} → 반응 점수 ${p.score}`).join('\n');
+  const styles = data.byStyle.map((s) => `- ${s.name}: 게시물 ${s.count}개, 평균 점수 ${s.avg}`).join('\n');
+  const comments = data.comments.map((c) => `- [${c.platformName}] "${c.topic}"에 단 댓글${c.likes ? ` (좋아요 ${c.likes})` : ''}: ${c.text}`).join('\n') || '(댓글 없음)';
+  return {
+    system: FEEDBACK_SYSTEM,
+    user: [
+      `[가게 정보]\n${storeToText(store)}`,
+      `[게시물별 반응] (반응 점수 = 좋아요 + 답글×2)\n${posts}`,
+      `[스타일별 평균]\n${styles}`,
+      `[댓글]\n${comments}`,
+      '위 데이터로 피드백을 주세요.',
+    ].join('\n\n'),
+  };
+}
+
+module.exports = { storeToText, buildPostPrompt, buildIdeasPrompt, buildFeedbackPrompt };

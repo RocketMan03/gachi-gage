@@ -70,4 +70,35 @@ function mockIdeas(store, pastPosts) {
   return { ideas: ideas.slice(0, 3) };
 }
 
-module.exports = { mockPost, mockIdeas };
+// AI 없이 만드는 피드백: 점수로 스타일 비교 + 낱말로 선플/악플 구분
+const GOOD = /좋|맛있|최고|예쁘|이쁘|감사|추천|대박|편해|편하|또 ?갈|또 ?올|친절|깔끔|사랑|굿|👍|❤|😍|🥰|good|love|nice/i;
+const BAD = /별로|비싸|불친절|실망|최악|맛없|더럽|불편|느려|늦|짜증|환불|싫|아쉽|그닥|👎|bad|worst/i;
+function mockFeedback(store, data) {
+  const negative = data.comments.filter((c) => BAD.test(c.text)).slice(0, 5)
+    .map((c) => ({ text: c.text, why: '불만이나 아쉬움이 담긴 댓글이에요.', reply: '소중한 의견 감사합니다. 말씀해 주신 부분 꼭 개선할게요. 다음에 방문해 주시면 더 좋은 모습 보여 드릴게요!' }));
+  const positive = data.comments.filter((c) => GOOD.test(c.text) && !BAD.test(c.text)).slice(0, 5)
+    .map((c) => ({ text: c.text, why: '가게나 상품을 좋게 말해 준 댓글이에요.' }));
+  const best = data.byStyle[0];
+  const worst = data.byStyle.length > 1 ? data.byStyle[data.byStyle.length - 1] : null;
+  const top = data.posts[0];
+  const few = data.posts.length < 3 ? ' 아직 게시물이 적어서 단정하긴 일러요.' : '';
+  return {
+    summary: data.posts.length
+      ? `게시물 ${data.posts.length}개, 댓글 ${data.comments.length}개를 살펴봤어요. 가장 반응이 좋았던 건 "${top.topic}"(점수 ${top.score})이에요.${few}`
+      : '아직 SNS에 올라간 게시물이 없어요. 게시물을 올리고 반응이 쌓이면 다시 눌러 보세요.',
+    styleInsights: [
+      best ? `${best.name} 스타일의 평균 점수가 ${best.avg}로 가장 높았어요.` : '',
+      worst && worst.avg < best.avg ? `${worst.name} 스타일은 평균 ${worst.avg}로 상대적으로 반응이 적었어요.` : '',
+    ].filter(Boolean),
+    positive,
+    negative,
+    suggestions: [
+      best ? `다음 게시물도 ${best.name} 스타일로 만들어 보세요.` : '',
+      top ? `"${top.topic}"처럼 반응이 좋았던 주제를 다른 각도로 한 번 더 소개해 보세요.` : '',
+      negative.length ? '불만 댓글에는 하루 안에 정중하게 답글을 달아 주세요.' : '',
+      '문구 끝에 "댓글로 알려 주세요"처럼 질문을 넣으면 댓글이 늘어나요.',
+    ].filter(Boolean),
+  };
+}
+
+module.exports = { mockPost, mockIdeas, mockFeedback };

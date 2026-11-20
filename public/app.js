@@ -36,6 +36,7 @@ async function api(method, url, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.needLogin && state.user) { state.user = null; render(); } // 로그인이 풀렸으면 로그인 화면으로
   if (!res.ok) throw new Error(data.error || '요청에 실패했어요.');
   return data;
 }
@@ -394,6 +395,7 @@ async function renderInsta(refresh) {
   $app.innerHTML = `
     <div class="head-row"><div><h1>반응</h1><p class="lead" style="margin:0">인스타그램·페이스북·스레드에 올린 게시물의 좋아요와 답글</p></div>
       <button class="btn ghost" data-ig-refresh>🔄 새로고침</button></div>
+    <button class="btn primary block" data-ai-feedback style="margin-bottom:12px">✨ AI 피드백 · 인스타·페이스북·스레드 반응 분석</button>
     <div class="ig-total" style="grid-template-columns:repeat(2,1fr)"><div><b>${nf(likes)}</b><span>좋아요</span></div><div><b>${nf(replies)}</b><span>답글</span></div></div>
     ${items.length ? items.map((x) => `<article class="card ig-item">
         <div class="ig-item-top">
@@ -411,6 +413,7 @@ async function renderInsta(refresh) {
 
 $app.addEventListener('click', async (e) => {
   if (state.view !== 'insta') return;
+  if (e.target.closest('[data-ai-feedback]')) return openFeedback();
   if (e.target.closest('[data-ig-refresh]')) { toast('새로 불러오는 중…'); await renderInsta(true); toast('최신 반응으로 바꿨어요.'); return; }
   const more = e.target.closest('[data-rc-more]');
   if (more) {
@@ -419,6 +422,123 @@ $app.addEventListener('click', async (e) => {
     const y = window.scrollY; await renderInsta(); window.scrollTo(0, y);
   }
 });
+
+// ---------- AI 피드백: 세 SNS 반응을 모아 잘 된 스타일, 선플·악플, 다음 게시물 제안 ----------
+async function openFeedback() {
+  const m = modal('<div class="loading"><div class="spinner"></div>세 SNS의 반응과 댓글을 모아 AI가 분석하는 중…<br><span class="hint">게시물이 많으면 1분쯤 걸릴 수 있어요</span></div>');
+  let d;
+  try { d = await api('POST', `/api/stores/${state.storeId}/feedback`); }
+  catch (err) { m.el.querySelector('.modal-box').innerHTML = `<div class="card">${esc(err.message)}</div><button class="btn line block" data-m="close">닫기</button>`; return; }
+  if (!document.body.contains(m.el)) return; // 기다리는 동안 닫음
+  const errs = Object.entries(d.errors || {});
+  const li = (arr) => arr.map((x) => `<li>${esc(x)}</li>`).join('');
+  m.el.querySelector('.modal-box').innerHTML = `
+    <div class="week-head"><h2 style="margin:0">✨ AI 피드백</h2><span class="hint">${d.source === 'mock' ? '예시 분석' : 'AI 분석'}</span></div>
+    <p style="margin:8px 0 0">${esc(d.summary)}</p>
+    ${d.fallbackReason ? `<div class="ig-note">AI 연결이 안 돼서 규칙으로 분석했어요.</div>` : ''}
+
+    ${d.byStyle?.length ? `<div class="fact-title">🎨 스타일·편집 효과별 반응</div>
+      <div class="fb-table">${d.byStyle.map((s, i) => `<div class="fb-row ${i === 0 ? 'best' : ''}"><span>${esc(s.name)}</span><span>게시물 ${s.count} · 평균 <b>${s.avg}</b>점</span></div>`).join('')}</div>
+      <ul class="plain">${li(d.styleInsights || [])}</ul>` : ''}
+
+    ${d.posts?.length ? `<div class="fact-title">🏆 반응 좋았던 게시물</div>
+      <div class="fb-table">${d.posts.slice(0, 3).map((p) => `<button type="button" class="fb-row" data-fb-open="${p.postId}"><span>${esc(p.topic)}<br><span class="hint">${esc(p.style)} + ${esc(p.effect)} · ${esc(p.platforms.join(', '))}</span></span><span>♡ ${nf(p.total.likes)} · 💬 ${nf(p.total.comments)}<br><b>${p.score}</b>점</span></button>`).join('')}</div>` : ''}
+
+    <div class="fact-title">😊 선플 (${d.positive.length})</div>
+    ${d.positive.length ? d.positive.map((x) => `<div class="fb-cmt good">“${esc(x.text)}”<div class="hint">${esc(x.why)}</div></div>`).join('') : '<div class="hint">아직 눈에 띄는 칭찬 댓글이 없어요.</div>'}
+
+    <div class="fact-title">😟 악플·아쉬운 점 (${d.negative.length})</div>
+    ${d.negative.length ? d.negative.map((x) => `<div class="fb-cmt bad">“${esc(x.text)}”<div class="hint">${esc(x.why)}</div>${x.reply ? `<div class="fb-reply">💬 답글 예시: ${esc(x.reply)}</div>` : ''}</div>`).join('') : '<div class="hint">불만 댓글은 없었어요.</div>'}
+
+    <div class="fact-title">📌 다음 게시물에 반영할 것</div>
+    <ul class="plain">${li(d.suggestions || [])}</ul>
+
+    <p class="hint" style="margin-top:12px">댓글 ${nf(d.commentCount)}개 · 게시물 ${d.posts.length}개 분석 · 반응 점수 = 좋아요 + 답글×2${errs.length ? `<br>못 가져온 곳: ${errs.map(([p, msg]) => `${esc(PLATFORMS.find((x) => x.id === p)?.name || p)} (${esc(msg)})`).join(', ')}` : ''}</p>
+    <div class="row"><button class="btn primary" data-go-new>이 제안으로 새 게시물 만들기</button><button class="btn line" data-m="close">닫기</button></div>`;
+  m.el.addEventListener('click', (e) => {
+    const open = e.target.closest('[data-fb-open]');
+    if (open) { m.close(); setView('post', { postId: open.dataset.fbOpen }); }
+    if (e.target.closest('[data-go-new]')) {
+      m.close();
+      state.newDraft.detail = (d.suggestions || []).slice(0, 2).join(' / ');
+      setView('new');
+    }
+  });
+}
+
+// ---------- 손님 관리(CRM): 세 SNS에 댓글을 단 사람 ----------
+const SEGMENTS = ['전체', '단골', '신규', '관심', '휴면'];
+const custLabel = (c) => (c.platform === 'facebook' ? c.handle : `@${c.handle}`);
+
+async function renderCustomers() {
+  const list = await api('GET', `/api/stores/${state.storeId}/customers`);
+  if (state.view !== 'customers') return;
+  const f = state.custFilter || '전체';
+  const shown = f === '전체' ? list : list.filter((c) => c.segment === f);
+  const count = (s) => (s === '전체' ? list.length : list.filter((c) => c.segment === s).length);
+  $app.innerHTML = `
+    <div class="head-row"><div><h1>손님</h1><p class="lead" style="margin:0">인스타·페이스북·스레드에 댓글을 단 손님을 모아 보여 드려요</p></div></div>
+    <button class="btn primary block big-new" data-cust="sync">🔄 댓글 불러오기</button>
+    <div class="chips filter">${SEGMENTS.map((s) => `<button class="chip ${f === s ? 'on' : ''}" data-cust-filter="${s}">${s} ${count(s)}</button>`).join('')}</div>
+    ${shown.length ? shown.map((c) => `
+      <button type="button" class="card cust" data-cust-open="${c.id}">
+        <div class="cust-av ${c.platform}">${esc(c.handle.slice(0, 1).toUpperCase())}</div>
+        <div class="cust-main">
+          <div class="cust-top"><span class="cust-name">${esc(custLabel(c))}</span><span class="seg ${c.segment}">${c.segment}</span></div>
+          <div class="cust-last">${esc(c.lastText)}</div>
+          <div class="cust-meta"><span>${PF[c.platform]?.name || ''}</span><span>댓글 ${c.count}</span><span>댓글 좋아요 ${c.likes}</span><span>최근 ${fmtDate(c.lastSeen)}</span>${c.memo ? '<span>📝 메모</span>' : ''}</div>
+        </div>
+      </button>`).join('') : `<div class="empty">${list.length ? '이 무리에 해당하는 손님이 없어요.' : '아직 모은 손님이 없어요.<br>게시물을 SNS에 올린 뒤 "댓글 불러오기"를 눌러 보세요.'}</div>`}
+    <p class="hint" style="margin-top:12px">단골: 댓글 3번 이상 · 신규: 처음 본 지 14일 이내 · 휴면: 30일 넘게 반응 없음. 좋아요만 누른 사람은 SNS가 알려 주지 않아 목록에 없어요.</p>`;
+}
+
+async function syncCustomers(btn) {
+  btn.disabled = true;
+  btn.textContent = '댓글 불러오는 중…';
+  try {
+    const r = await api('POST', `/api/stores/${state.storeId}/customers/sync`);
+    await renderCustomers();
+    toast(r.checked ? `새 댓글 ${r.added}개를 불러왔어요.` : '아직 SNS에 올린 게시물이 없어요.');
+    const errs = Object.entries(r.errors || {});
+    if (errs.length) alertBox(`일부 SNS에서 댓글을 못 불러왔어요.\n\n${errs.map(([p, m]) => `· ${PF[p]?.name || p}: ${m}`).join('\n')}`);
+  } catch (err) {
+    toast(err.message);
+    btn.disabled = false;
+    btn.textContent = '🔄 댓글 불러오기';
+  }
+}
+
+async function openCustomer(id) {
+  const c = await api('GET', `/api/customers/${id}`);
+  modal(`
+    <div class="week-head"><h2 style="margin:0">${esc(custLabel(c))}</h2><span class="seg ${c.segment}">${c.segment}</span></div>
+    <div class="cust-meta" style="margin:6px 0 10px"><span>${PF[c.platform]?.name || ''}</span><span>처음 ${fmtDate(c.firstSeen)}</span><span>최근 ${fmtDate(c.lastSeen)}</span><span>댓글 ${c.count}</span><span>댓글 좋아요 ${c.likes}</span></div>
+    <label style="margin-top:0">사장님 메모 <span class="hint">(나만 보여요 · 예: 주말마다 오는 대학생)</span></label>
+    <textarea id="custMemo" maxlength="1000">${esc(c.memo)}</textarea>
+    <div class="fact-title">남긴 댓글</div>
+    <div>${c.activities.map((a) => `<div class="act"><div class="act-head"><span>${esc(a.postTopic)} · ${PF[a.platform]?.name || ''}</span><span>${fmtDate(a.at)}${a.likes ? ` · ♥ ${a.likes}` : ''}</span></div>${esc(a.text)}</div>`).join('')}</div>
+    <div class="row"><button class="btn primary" data-m="save">메모 저장</button><button class="btn line" data-m="close">닫기</button></div>
+    <div class="row"><button class="btn ghost" data-m="forget">🗑 이 손님 정보 지우기</button></div>`,
+    async (e, close) => {
+      const b = e.target.closest('[data-m]');
+      if (!b) return;
+      try {
+        if (b.dataset.m === 'save') {
+          await api('PUT', `/api/customers/${c.id}`, { memo: document.getElementById('custMemo').value });
+          close();
+          toast('메모를 저장했어요.');
+          renderCustomers();
+        }
+        if (b.dataset.m === 'forget') {
+          close();
+          if (!(await confirmBox(`${esc(custLabel(c))} 손님의 정보와 댓글 기록을 지울까요? 다음에 댓글을 불러와도 다시 넣지 않아요.`, '지우기'))) return;
+          await api('DELETE', `/api/customers/${c.id}`);
+          toast('손님 정보를 지웠어요.');
+          renderCustomers();
+        }
+      } catch (err) { toast(err.message); }
+    });
+}
 
 // ---------- 새 게시물: 1단계 입력 ----------
 const TONE_DEFAULT = ['친근하게', '깔끔하게 정보 위주로', '이벤트 느낌으로', '감성적으로', '고급스럽게'];
@@ -913,6 +1033,13 @@ $app.addEventListener('click', async (e) => {
   if ((el = t('[data-filter]'))) { state.filter = el.dataset.filter; return renderPosts(); }
   if ((el = t('[data-open]'))) return setView('post', { postId: el.dataset.open });
 
+  // 손님
+  if (state.view === 'customers') {
+    if ((el = t('[data-cust=sync]'))) return syncCustomers(el);
+    if ((el = t('[data-cust-filter]'))) { state.custFilter = el.dataset.custFilter; return renderCustomers(); }
+    if ((el = t('[data-cust-open]'))) return openCustomer(el.dataset.custOpen).catch((err) => toast(err.message));
+  }
+
   // 새 게시물 입력
   if (state.view === 'new') {
     if ((el = t('[data-topic]'))) {
@@ -1257,7 +1384,68 @@ $app.addEventListener('keydown', (e) => {
 });
 
 // ---------- 라우팅 ----------
+// ---------- 로그인 · 회원가입 ----------
+let authMode = 'login';
+function renderAuth() {
+  $nav.classList.add('hidden');
+  const signup = authMode === 'signup';
+  $app.innerHTML = `
+    <div class="auth">
+      <div class="ob-logo" style="text-align:center;margin:12px 0 4px">🏪 같이가게</div>
+      <p class="lead" style="text-align:center">${signup ? '아이디를 만들면 어느 기기에서든 내 가게를 이어서 쓸 수 있어요.' : '로그인하고 우리 가게 홍보를 이어서 해요.'}</p>
+      <form id="authForm" class="card" autocomplete="on">
+        <label style="margin-top:0">아이디</label>
+        <input name="loginId" autocomplete="username" autocapitalize="none" placeholder="영문 소문자·숫자 4자 이상" required />
+        <label>비밀번호</label>
+        <input name="password" type="password" autocomplete="${signup ? 'new-password' : 'current-password'}" placeholder="${signup ? '8자 이상' : ''}" required />
+        ${signup ? '<label>비밀번호 확인</label><input name="password2" type="password" autocomplete="new-password" required />' : ''}
+        <div class="row"><button type="submit" class="btn primary block">${signup ? '가입하고 시작하기' : '로그인'}</button></div>
+      </form>
+      <button type="button" class="btn ghost block" data-auth-mode="${signup ? 'login' : 'signup'}">${signup ? '이미 아이디가 있어요 · 로그인' : '처음이에요 · 회원가입'}</button>
+    </div>`;
+  const form = document.getElementById('authForm');
+  form.elements.loginId.focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = form.elements;
+    if (signup && f.password.value !== f.password2.value) return toast('비밀번호가 서로 달라요.');
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      const r = await api('POST', `/api/auth/${signup ? 'signup' : 'login'}`, { loginId: f.loginId.value, password: f.password.value, claimStoreId: lsGet('gachi.storeId') });
+      await afterLogin(r);
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false;
+    }
+  });
+}
+$app.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-auth-mode]');
+  if (b && !state.user) { authMode = b.dataset.authMode; renderAuth(); }
+});
+async function afterLogin(me) {
+  state.user = me.user;
+  state.storeId = me.storeId;
+  if (me.connections) state.connections = me.connections;
+  state.store = null;
+  if (me.storeId) lsSet('gachi.storeId', me.storeId);
+  else lsDel('gachi.storeId');
+  document.getElementById('userBox').classList.remove('hidden');
+  document.getElementById('userName').textContent = me.user.loginId;
+  setView('posts');
+}
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  if (!(await confirmBox('로그아웃할까요?', '로그아웃'))) return;
+  await api('POST', '/api/auth/logout').catch(() => {});
+  Object.assign(state, { user: null, storeId: null, store: null, post: null });
+  lsDel('gachi.storeId');
+  document.getElementById('userBox').classList.add('hidden');
+  render();
+});
+
 async function render() {
+  if (!state.user) return renderAuth();
   if (!state.storeId) {
     $nav.classList.add('hidden');
     renderOnboarding();
@@ -1273,6 +1461,7 @@ async function render() {
     else if (state.view === 'store') { $app.innerHTML = storeForm(state.store); bindStoreForm(state.store); }
     else if (state.view === 'channels') await renderChannels();
     else if (state.view === 'insta') await renderInsta();
+    else if (state.view === 'customers') await renderCustomers();
   } catch (err) {
     if (/가게 정보를 찾을 수 없어요/.test(err.message)) {
       lsDel('gachi.storeId');
@@ -1298,11 +1487,10 @@ window.addEventListener('beforeunload', () => { if (saveTimer) saveCaptions(); }
   try {
     const h = await api('GET', '/api/health');
     state.tones = h.tones || [];
-    state.connections = h.connections || {};
     const badge = document.getElementById('providerBadge');
     badge.textContent = h.provider === 'mock' ? '데모 모드' : `AI: ${h.model}`;
     badge.classList.toggle('mock', h.provider === 'mock');
   } catch {}
-  state.storeId = lsGet('gachi.storeId');
-  render();
+  try { await afterLogin(await api('GET', '/api/auth/me')); }
+  catch { render(); } // 로그인 안 됨 → 로그인 화면
 })();

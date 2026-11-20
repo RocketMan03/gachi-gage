@@ -5,6 +5,7 @@ const express = require('express');
 const db = require('./db');
 const llm = require('./llm');
 const connections = require('./connections');
+const auth = require('./auth');
 const { publish, testConnection, deletePublication, fetchMetrics, exists, reactions } = require('./publish');
 
 db.load();
@@ -12,6 +13,7 @@ connections.load();
 const app = express();
 const UPLOAD_DIR = path.join(__dirname, '..', 'data', 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+app.set('trust proxy', 1); // Render 같은 프록시 뒤에서 https·IP를 제대로 알기 위해
 app.use(express.json({ limit: '300kb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 // 업로드한 사진 (인스타·스레드는 이 주소로 Meta가 사진을 가져감)
@@ -55,21 +57,69 @@ function validateStore(d) {
   if (!d.address) missing.push('주소');
   return missing;
 }
+// 내 가게가 아니면 없는 것처럼 (남의 가게 ID를 알아도 못 봄)
 function needStore(req, res) {
   const store = db.getStore(req.params.id);
-  if (!store) res.status(404).json({ error: '가게 정보를 찾을 수 없어요.' });
+  if (!store || store.ownerId !== req.user.id) {
+    res.status(404).json({ error: '가게 정보를 찾을 수 없어요.' });
+    return null;
+  }
   return store;
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, provider: llm.providerName(), model: llm.modelName(), tones: TONES, connections: connections.view() });
+  res.json({ ok: true, provider: llm.providerName(), model: llm.modelName(), tones: TONES });
+});
+
+// ---------- 로그인 ----------
+const userView = (u) => ({ loginId: u.loginId, name: u.name });
+// 로그인 전 이 브라우저에서 쓰던 가게(주인 없음)가 있으면 내 계정으로 가져오기
+function claimStore(user, storeId) {
+  const s = storeId && db.getStore(storeId);
+  if (s && !s.ownerId && !db.storeOf(user.id)) db.updateStore(s.id, { ownerId: user.id });
+}
+app.post('/api/auth/signup', (req, res) => {
+  const loginId = String(req.body?.loginId || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  if (!auth.LOGIN_ID.test(loginId)) return res.status(400).json({ error: '아이디는 영문 소문자·숫자·._@- 로 4~40자로 만들어 주세요.' });
+  if (password.length < 8 || password.length > 100) return res.status(400).json({ error: '비밀번호는 8자 이상으로 만들어 주세요.' });
+  if (db.findUserByLoginId(loginId)) return res.status(409).json({ error: '이미 있는 아이디예요. 다른 아이디를 써 주세요.' });
+  const { salt, hash } = auth.hashPassword(password);
+  const user = db.createUser({ loginId, name: String(req.body?.name || '').trim().slice(0, 30), salt, passHash: hash });
+  claimStore(user, req.body?.claimStoreId);
+  auth.startSession(req, res, user);
+  res.status(201).json({ user: userView(user), storeId: db.storeOf(user.id)?.id || null });
+});
+app.post('/api/auth/login', (req, res) => {
+  if (auth.tooMany(req.ip)) return res.status(429).json({ error: '로그인을 너무 많이 틀렸어요. 10분 뒤에 다시 해 주세요.' });
+  const user = db.findUserByLoginId(String(req.body?.loginId || '').trim().toLowerCase());
+  if (!user || !auth.checkPassword(String(req.body?.password || ''), user)) {
+    auth.addFail(req.ip);
+    return res.status(401).json({ error: '아이디나 비밀번호가 맞지 않아요.' });
+  }
+  claimStore(user, req.body?.claimStoreId);
+  auth.startSession(req, res, user);
+  res.json({ user: userView(user), storeId: db.storeOf(user.id)?.id || null });
+});
+app.post('/api/auth/logout', (req, res) => {
+  auth.endSession(req, res);
+  res.json({ ok: true });
+});
+// 여기부터 아래 API는 모두 로그인해야 쓸 수 있음
+app.use('/api', (req, res, next) => {
+  req.user = auth.currentUser(req);
+  if (!req.user) return res.status(401).json({ error: '로그인이 필요해요.', needLogin: true });
+  next();
+});
+app.get('/api/auth/me', (req, res) => {
+  res.json({ user: userView(req.user), storeId: db.storeOf(req.user.id)?.id || null, connections: connections.view() });
 });
 
 app.post('/api/stores', (req, res) => {
   const data = cleanStoreInput(req.body || {});
   const missing = validateStore(data);
   if (missing.length) return res.status(400).json({ error: `${missing.join(', ')}을(를) 입력해 주세요.` });
-  res.status(201).json(db.createStore(data));
+  res.status(201).json(db.createStore({ ...data, ownerId: req.user.id }));
 });
 app.get('/api/stores/:id', (req, res) => {
   const store = needStore(req, res);
@@ -106,7 +156,10 @@ const withStatus = (p) => ({ ...p, status: postStatus(p) });
 
 function needPost(req, res) {
   const post = db.getPost(req.params.postId);
-  if (!post) res.status(404).json({ error: '게시물을 찾을 수 없어요.' });
+  if (!post || db.getStore(post.storeId)?.ownerId !== req.user.id) {
+    res.status(404).json({ error: '게시물을 찾을 수 없어요.' });
+    return null;
+  }
   return post;
 }
 
@@ -194,6 +247,56 @@ app.get('/api/stores/:id/reactions', wrap(async (req, res) => {
   }
   items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   res.json({ items, removed, fetchedAt: db.now() });
+}));
+
+// ---------- AI 피드백: 세 SNS의 반응·댓글을 모아 무엇이 잘 됐는지, 다음엔 뭘 할지 ----------
+const LAYOUT_KO = { magazine: '매거진 표지', caption: '캡션 박스', bottom: '사진 + 아래 글', frame: '포스터형', slide: '슬라이드 피드', text: '글자만' };
+const EFFECT_KO = { none: '효과 없음', shapes: '문구·도형', doodle: '드로잉', sparkle: '반짝 하이라이트', sticker: '스티커 콜라주' };
+// 게시물의 카드 스타일: 새 게시물에서 고른 값, 없으면 표지 카드 이름표("magazine+sparkle")
+function postStyle(post) {
+  const card = post.images.find((i) => i.kind === 'card');
+  const [l, e] = String(card?.label || '').split('+');
+  const layout = post.layout || l;
+  return { style: LAYOUT_KO[layout] || '기본 카드', effect: EFFECT_KO[post.effect || e] || '효과 없음' };
+}
+const reactScore = (t) => t.likes + t.comments * 2; // 답글은 좋아요보다 품이 드니 2배
+
+app.post('/api/stores/:id/feedback', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const conns = connections.get();
+  const posts = [];
+  const comments = [];
+  const errors = {};
+  for (const post of db.listPosts(store.id)) {
+    const pubs = Object.entries(post.publications || {}).filter(([, p]) => p.status === 'published' && p.id);
+    if (!pubs.length) continue;
+    const total = { likes: 0, comments: 0 };
+    for (const [platform, pub] of pubs) {
+      try {
+        const r = await reactions(platform, conns, pub); // 반응 화면과 같은 함수: 좋아요·답글 수 + 답글 내용
+        total.likes += r.counts?.likes || 0;
+        total.comments += r.counts?.comments || 0;
+        for (const c of r.comments) if (c.text.trim()) comments.push({ platform, platformName: PLATFORM_NAMES[platform], postId: post.id, topic: post.topic, text: c.text, username: c.username, likes: c.likes || 0 });
+        if (r.errors.comments || r.errors.counts) errors[platform] = r.errors.comments || r.errors.counts;
+      } catch (e) {
+        errors[platform] = e.message;
+      }
+    }
+    posts.push({ postId: post.id, topic: post.topic, tone: post.tone, at: pubs[0][1].at || post.createdAt,
+      platforms: pubs.map(([p]) => PLATFORM_NAMES[p]), ...postStyle(post), total, score: reactScore(total) });
+  }
+  posts.sort((a, b) => b.score - a.score);
+  // 스타일 × 효과별 평균 점수
+  const groups = {};
+  for (const p of posts) (groups[`${p.style} + ${p.effect}`] ||= []).push(p.score);
+  const byStyle = Object.entries(groups)
+    .map(([name, s]) => ({ name, count: s.length, avg: Math.round(s.reduce((a, b) => a + b, 0) / s.length) }))
+    .sort((a, b) => b.avg - a.avg);
+  comments.sort((a, b) => b.likes - a.likes);
+  const data = { posts, byStyle, comments: comments.slice(0, 80).map((c) => ({ ...c, text: c.text.slice(0, 200) })) };
+  const ai = await llm.generateFeedback(store, data);
+  res.json({ posts, byStyle, commentCount: comments.length, errors, ...ai, generatedAt: db.now() });
 }));
 
 // 게시물 한 개의 반응 (게시물 화면용)
@@ -424,6 +527,86 @@ app.post('/api/posts/:postId/metrics', wrap(async (req, res) => {
   db.updatePost(post.id, {});
   res.json({ post: withStatus(post), errors });
 }));
+
+// ---------- 손님 관리(CRM) ----------
+const DAY = 86400000;
+// 단골: 댓글 3번 이상 / 신규: 처음 본 지 14일 이내 / 휴면: 30일 넘게 조용 / 나머지: 관심
+function segmentOf(c, count) {
+  const days = (iso) => (Date.now() - new Date(iso).getTime()) / DAY;
+  if (days(c.lastSeen) > 30) return '휴면';
+  if (count >= 3) return '단골';
+  if (days(c.firstSeen) <= 14) return '신규';
+  return '관심';
+}
+function customerView(c) {
+  const acts = db.activitiesOf(c.id);
+  return { ...c, count: acts.length, likes: acts.reduce((n, a) => n + (a.likes || 0), 0), lastText: acts[0]?.text || '', segment: segmentOf(c, acts.length) };
+}
+// 내 가게 손님만
+function needCustomer(req, res) {
+  const c = db.getCustomer(req.params.customerId);
+  if (!c || db.getStore(c.storeId)?.ownerId !== req.user.id) {
+    res.status(404).json({ error: '손님 정보를 찾을 수 없어요.' });
+    return null;
+  }
+  return c;
+}
+
+// 세 SNS에 올린 게시물의 댓글을 모아 손님 목록 만들기 (반응 화면과 같은 reactions 함수 사용)
+app.post('/api/stores/:id/customers/sync', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const conns = connections.get();
+  const errors = {};
+  let added = 0;
+  let checked = 0;
+  for (const post of db.listPosts(store.id)) {
+    for (const [platform, pub] of Object.entries(post.publications || {})) {
+      if (pub.status !== 'published' || !pub.id) continue;
+      checked++;
+      try {
+        const r = await reactions(platform, conns, pub);
+        if (r.errors.comments) errors[platform] = r.errors.comments;
+        // shortcut: 맨 위 댓글만 손님으로 셈 (답글에는 가게 계정이 단 답이 섞여서). 가게 계정 이름을 알게 되면 답글도 포함
+        for (const c of r.comments) {
+          const handle = c.username === 'Facebook 사용자' ? '' : c.username; // 페이스북은 권한 없으면 이름이 안 와서 누군지 모름
+          if (db.recordComment(store.id, post.id, platform, { id: c.id, handle, text: c.text, likes: c.likes || 0, at: c.at || db.now() })) added++;
+        }
+      } catch (e) {
+        errors[platform] = e.message;
+      }
+    }
+  }
+  db.save();
+  res.json({ added, checked, errors });
+}));
+
+app.get('/api/stores/:id/customers', (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  res.json(db.listCustomers(store.id).map(customerView).sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)));
+});
+
+app.get('/api/customers/:customerId', (req, res) => {
+  const c = needCustomer(req, res);
+  if (!c) return;
+  const topic = (postId) => db.getPost(postId)?.topic || '(지운 게시물)';
+  res.json({ ...customerView(c), activities: db.activitiesOf(c.id).map((a) => ({ ...a, postTopic: topic(a.postId) })) });
+});
+
+app.put('/api/customers/:customerId', (req, res) => {
+  const c = needCustomer(req, res);
+  if (!c) return;
+  if (typeof req.body?.memo === 'string') db.updateCustomer(c.id, { memo: req.body.memo.slice(0, 1000) });
+  res.json(customerView(db.getCustomer(c.id)));
+});
+
+app.delete('/api/customers/:customerId', (req, res) => {
+  const c = needCustomer(req, res);
+  if (!c) return;
+  db.forgetCustomer(c.id);
+  res.json({ ok: true });
+});
 
 // ---------- SNS 연결 ----------
 app.get('/api/connections', (req, res) => res.json(connections.view()));
