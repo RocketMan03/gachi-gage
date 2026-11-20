@@ -151,7 +151,8 @@ const STEPS = [
 /* ---------- 인스타그램 바로 올리기 ---------- */
 function igBlock(w, r) {
   const photo = (w.photos || {})[r.id], post = (w.posts || {})[r.id];
-  if (post) return `<div class="ig-done"><strong>인스타그램에 올렸어요</strong>${post.url ? `<a href="${esc(post.url)}" target="_blank" rel="noopener">게시물 보기 ›</a>` : ""}</div>`;
+  if (post) return `<div class="ig-done"><strong>인스타그램에 올렸어요</strong>${post.url ? `<a href="${esc(post.url)}" target="_blank" rel="noopener">게시물 보기 ›</a>` : ""}</div>
+    ${S.ig?.canDelete ? `<button class="link-btn" id="ig-del-go" style="align-self:flex-start;color:var(--warn)">인스타그램에서 삭제하기</button>` : ""}`;
   return `<div class="ig-box"><div class="field-label">올릴 사진</div>
     <div class="ig-photo">${photo ? `<img src="/media/${esc(photo)}" alt="올릴 사진">` : "<span>사진을 골라 주세요</span>"}</div>
     <label class="soft-btn" for="ph-file" style="align-self:flex-start;cursor:pointer">${photo ? "사진 바꾸기" : "사진 고르기"}</label>
@@ -252,10 +253,21 @@ const V = {
     return `<section class="page"><div class="page-top"><button class="icon-btn round" data-go="copy" aria-label="뒤로">${I.back}</button><span></span></div>
       <div class="page-body"><h1 class="q">이렇게 올릴까요?</h1><p class="q-sub">@${esc(S.ig?.username || "")} · 인스타그램 피드</p>
       <div class="ig-preview">${photo ? `<img src="/media/${esc(photo)}" alt="">` : ""}<p>${esc(text)}</p></div>
-      <div class="adjust"><b>확인</b><span>가격, 기간, 가게 이름이 맞는지 한 번 더 봐 주세요. 올린 뒤에는 이 앱에서 지울 수 없고, 인스타그램 앱에서 직접 지워야 해요.</span></div>
+      <div class="adjust"><b>확인</b><span>가격, 기간, 가게 이름이 맞는지 한 번 더 봐 주세요. ${S.ig?.canDelete ? "잘못 올렸다면 이 앱에서 삭제할 수 있어요." : "올린 뒤에는 인스타그램 앱에서 직접 지워야 해요."}</span></div>
       ${S.ig?.pin ? `<div class="field"><label for="ig-pin">게시 PIN</label><input class="pill-input" id="ig-pin" inputmode="numeric" autocomplete="off" placeholder="팀에서 정한 숫자"></div>` : ""}
       ${blocked ? `<span class="err-text">${blocked}</span>` : ""}
       </div><div class="bottom-cta"><button class="cta" id="ig-post" ${blocked || !photo ? "disabled" : ""}>지금 올리기</button></div></section>`;
+  },
+  igdel() {
+    const { w, r } = findRec(S.sel); if (!r) return V.home();
+    const post = (w.posts || {})[r.id], photo = (w.photos || {})[r.id];
+    if (!post) return V.copy();
+    return `<section class="page"><div class="page-top"><button class="icon-btn round" data-go="copy" aria-label="뒤로">${I.back}</button><span></span></div>
+      <div class="page-body"><h1 class="q">인스타그램에서\n삭제할까요?</h1><p class="q-sub">@${esc(S.ig?.username || "")} · ${esc(r.title)}</p>
+      ${photo ? `<div class="ig-photo"><img src="/media/${esc(photo)}" alt=""></div>` : ""}
+      <div class="adjust"><b>주의</b><span>인스타그램에서 게시물이 지워지고 좋아요와 댓글도 함께 사라져요. 되돌릴 수 없어요. 실행 기록은 그대로 남아요.</span></div>
+      ${S.ig?.pin ? `<div class="field"><label for="ig-pin">게시 PIN</label><input class="pill-input" id="ig-pin" inputmode="numeric" autocomplete="off" placeholder="팀에서 정한 숫자"></div>` : ""}
+      </div><div class="bottom-cta"><button class="cta" id="ig-del" style="background:var(--warn)">삭제하기</button><button class="cta ghost sm" data-go="copy">취소</button></div></section>`;
   },
   logrec() {
     const { r } = findRec(S.sel); if (!r) return V.home();
@@ -419,6 +431,11 @@ document.addEventListener("click", e => {
   if (b.id === "demo-pick") { S.demoPick = !S.demoPick; return render(); }
   if (b.id === "cp-make") { syncCopy(); return run("홍보 문구를 쓰고 있어요", async () => { const r = await api("/api/copy", { rec: S.sel, fields: S.copyF }); S.store = r.store; S.copyText = null; render(); }); }
   if (b.id === "ig-go") { syncCopy(); return go("igpost"); }
+  if (b.id === "ig-del-go") { syncCopy(); return go("igdel"); }
+  if (b.id === "ig-del") return run("인스타그램에서 삭제하고 있어요", async () => {
+    const r = await api("/api/instagram/delete", { rec: S.sel, pin: document.getElementById("ig-pin")?.value || "" });
+    S.store = r.store; go("copy"); toast("인스타그램에서 삭제했어요. 필요하면 다시 올릴 수 있어요.");
+  });
   if (b.id === "ig-post") return run("인스타그램에 올리고 있어요", async () => {
     const { w } = findRec(S.sel), c = w.copies[S.sel];
     const text = (S.copyText ?? c.text) + "\n\n" + (c.hashtags || []).join(" ");

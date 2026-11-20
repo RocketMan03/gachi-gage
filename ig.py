@@ -71,7 +71,7 @@ def _call(method, path, params):
     params = dict(params, access_token=token())
     url = f"{_host()}/{_ver()}/{path}"
     data = None
-    if method == "GET":
+    if method in ("GET", "DELETE"):
         url += "?" + urllib.parse.urlencode(params)
     else:
         data = urllib.parse.urlencode(params).encode()
@@ -87,6 +87,9 @@ def _call(method, path, params):
         code, msg = err.get("code"), err.get("error_user_msg") or err.get("message") or f"HTTP {e.code}"
         if code == 190:
             raise IGError("인스타그램 토큰이 만료됐거나 올바르지 않아요. Meta 개발자 화면에서 토큰을 다시 만들어 넣어 주세요.")
+        if code in (10, 200) and method == "DELETE":
+            raise IGError("삭제 권한이 없어요. Meta 개발자 화면에서 instagram_manage_contents 권한을 추가해 토큰을 다시 만들거나, "
+                          f"인스타그램 앱에서 직접 지워 주세요. ({msg})")
         if code in (10, 200):
             raise IGError(f"게시 권한이 없어요. 토큰을 만들 때 instagram_business_content_publish 권한을 허용했는지 확인해 주세요. ({msg})")
         raise IGError(f"인스타그램이 요청을 거절했어요: {msg}")
@@ -129,7 +132,7 @@ def status():
         return {"enabled": False}
     try:
         m = me()
-        return {"enabled": True, "username": m["username"], "pin": pin_required(), "publicOk": bool(public_base())}
+        return {"enabled": True, "username": m["username"], "pin": pin_required(), "publicOk": bool(public_base()), "canDelete": fb_login()}
     except IGError as e:
         return {"enabled": True, "error": str(e), "pin": pin_required(), "publicOk": bool(public_base())}
 
@@ -189,3 +192,17 @@ def publish(photo_file, caption):
     except IGError:
         pass
     return {"id": mid, "url": url}
+
+
+def delete(media_id):
+    """올린 게시물을 인스타그램에서 지운다.
+    Meta 정책상 페이스북 로그인 방식 토큰(EAA...)과 instagram_manage_contents 권한이 있어야 하고,
+    graph.facebook.com 에서만 된다. 캐러셀은 통째로만 지워진다."""
+    if not enabled():
+        raise IGError("인스타그램이 연결되지 않았어요.")
+    if not fb_login():
+        raise IGError("지금 연결 방식(인스타그램 로그인 토큰)으로는 Meta가 삭제를 지원하지 않아요. 인스타그램 앱에서 직접 지워 주세요.")
+    d = _call("DELETE", str(media_id), {})
+    if d.get("success") is False:
+        raise IGError("인스타그램이 삭제를 완료하지 못했어요. 인스타그램 앱에서 확인해 주세요.")
+    return True

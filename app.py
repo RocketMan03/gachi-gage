@@ -275,6 +275,26 @@ def ig_publish():
     return jsonify(store=_public(s), post=w["posts"][r["id"]])
 
 
+@app.post("/api/instagram/delete")
+def ig_delete():
+    s = _store_or_404()
+    d = request.get_json(force=True)
+    w, r = _find_rec(s, d.get("rec"))
+    if not ig.check_pin(d.get("pin")):
+        abort(403, "게시 PIN이 맞지 않아요.")
+    post = (w.get("posts") or {}).get(r["id"])
+    if not post:
+        abort(400, "이 홍보로 올린 인스타그램 게시물이 없어요.")
+    try:
+        ig.delete(post["id"])
+    except ig.IGError as e:
+        abort(400, str(e))
+    w.setdefault("deleted", []).append({**post, "rec": r["id"], "deletedAt": dt.datetime.now().isoformat(timespec="minutes")})
+    del w["posts"][r["id"]]  # 다시 올릴 수 있게
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
 @app.post("/api/log")
 def log():
     s = _store_or_404()

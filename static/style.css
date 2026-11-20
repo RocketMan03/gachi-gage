@@ -261,3 +261,4 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .ig-preview img{width:100%;aspect-ratio:4/5;object-fit:cover}
 .ig-preview p{margin:0;padding:14px 16px;white-space:pre-line;font-size:16px;line-height:1.6}
 .page-top .icon-btn{width:56px;height:56px;border-radius:50%;background:#fff;box-shadow:0 8px 20px rgba(0,0,0,.08),inset 0 0 0 1px #ECECEC}
+.toast{bottom:calc(170px + env(safe-area-inset-bottom,0px))}
