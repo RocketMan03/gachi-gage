@@ -342,6 +342,81 @@ async function renderPosts() {
     }).join('') : `<div class="card empty">${posts.length ? '이 조건의 게시물이 없어요.' : '아직 만든 게시물이 없어요.<br>위의 <b>새 게시물 만들기</b>를 눌러 첫 게시물을 만들어 보세요!'}</div>`}`;
 }
 
+// ---------- 인스타그램 반응 (좋아요·댓글) ----------
+const igOpen = new Set(); // 댓글을 전부 펼친 게시물
+const ago = (iso) => {
+  if (!iso) return '';
+  const m = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (m < 1) return '방금';
+  if (m < 60) return `${m}분 전`;
+  if (m < 1440) return `${Math.floor(m / 60)}시간 전`;
+  return fmtDate(iso);
+};
+const nf = (n) => Number(n || 0).toLocaleString('ko-KR');
+
+function igCommentHtml(c) {
+  return `<div class="ig-comment"><span class="who">@${esc(c.username || '알 수 없음')}</span>${esc(c.text)}<span class="when">${esc(ago(c.at))}${c.likes ? ` · ♡ ${nf(c.likes)}` : ''}</span>
+    ${(c.replies || []).map((r) => `<div class="reply"><span class="who">@${esc(r.username || '알 수 없음')}</span>${esc(r.text)}<span class="when">${esc(ago(r.at))}</span></div>`).join('')}</div>`;
+}
+
+async function renderInsta(refresh) {
+  if (!refresh) loading('인스타그램에서 반응을 가져오는 중…');
+  let d;
+  try { d = await api('GET', `/api/stores/${state.storeId}/instagram${refresh ? '?refresh=1' : ''}`); }
+  catch (err) { $app.innerHTML = `<h1>인스타 반응</h1><div class="card">${esc(err.message)}</div>`; return; }
+  if (state.view !== 'insta') return;
+  if (!d.connected) {
+    $app.innerHTML = `<h1>인스타 반응</h1><p class="lead">인스타그램에 올린 게시물의 좋아요와 댓글을 모아 보는 곳이에요.</p>
+      <div class="card empty">인스타그램이 연결되지 않았어요.<br><button class="btn primary" data-go="channels" style="margin-top:12px">계정 연결하러 가기</button></div>`;
+    return;
+  }
+  const items = d.items;
+  const sum = (k) => items.reduce((n, x) => n + (x.counts?.[k] || 0), 0);
+  const views = items.reduce((n, x) => n + (x.insights?.views || 0), 0);
+  $app.innerHTML = `
+    <div class="head-row"><div><h1>인스타 반응</h1><p class="lead" style="margin:0">올린 게시물의 좋아요와 댓글을 한곳에서 봐요</p></div>
+      <button class="btn ghost" data-ig-refresh>🔄 새로고침</button></div>
+    <div class="ig-total"><div><b>${nf(sum('likes'))}</b><span>좋아요</span></div><div><b>${nf(sum('comments'))}</b><span>댓글</span></div><div><b>${views ? nf(views) : '–'}</b><span>조회수</span></div></div>
+    ${items.length ? items.map((x) => {
+      const all = igOpen.has(x.postId);
+      const list = x.comments || [];
+      const shown = all ? list : list.slice(0, 3);
+      const ins = x.insights || {};
+      return `<article class="card ig-item">
+        <div class="ig-item-top">
+          <div class="post-thumb">${x.cover ? `<img src="${esc(x.cover)}" alt="" />` : '<span>📸</span>'}</div>
+          <div style="flex:1;min-width:0">
+            <div class="post-top"><span class="post-title" style="margin:0">${esc(x.topic)}</span><span class="date">${esc(fmtDate(x.at))}</span></div>
+            ${x.error ? `<div class="ig-note">${esc(x.error)}</div>` : `<div class="ig-stats">
+              <span class="metric big">♡ 좋아요 <b>${nf(x.counts?.likes)}</b></span><span class="metric big">💬 댓글 <b>${nf(x.counts?.comments)}</b></span>
+              ${ins.views != null ? `<span class="metric">조회 <b>${nf(ins.views)}</b></span>` : ''}${ins.reach != null ? `<span class="metric">도달 <b>${nf(ins.reach)}</b></span>` : ''}
+              ${ins.saved != null ? `<span class="metric">저장 <b>${nf(ins.saved)}</b></span>` : ''}${ins.shares != null ? `<span class="metric">공유 <b>${nf(ins.shares)}</b></span>` : ''}</div>`}
+            <div class="row" style="margin-top:8px;gap:6px">${x.permalink || x.url ? `<a class="btn line sm" href="${esc(x.permalink || x.url)}" target="_blank" rel="noopener">인스타에서 보기</a>` : ''}<button class="btn line sm" data-open="${x.postId}">게시물 관리</button></div>
+          </div>
+        </div>
+        ${x.error ? '' : `<div class="ig-comments">
+          ${x.errors?.comments ? `<div class="ig-note">댓글 내용: ${esc(x.errors.comments)}</div>`
+            : list.length ? shown.map(igCommentHtml).join('') + (list.length > 3 ? `<button class="btn ghost" data-ig-more="${x.postId}">${all ? '접기' : `댓글 ${list.length - 3}개 더 보기`}</button>` : '')
+            : '<div class="hint" style="padding:6px 0">아직 댓글이 없어요.</div>'}
+          ${x.errors?.insights ? `<div class="ig-note">조회수 등: ${esc(x.errors.insights)}</div>` : ''}
+        </div>`}
+      </article>`;
+    }).join('') : '<div class="card empty">아직 인스타그램에 올린 게시물이 없어요.<br>새 게시물을 만들어 인스타그램에 올려 보세요.</div>'}
+    <p class="hint" style="text-align:center">${esc(fmtDate(d.fetchedAt))} 기준 · 조회수·도달은 인스타그램에서 최대 48시간 늦게 반영될 수 있어요</p>`;
+  if (d.removed?.length) removedToast(d.removed);
+}
+
+$app.addEventListener('click', async (e) => {
+  if (state.view !== 'insta') return;
+  if (e.target.closest('[data-ig-refresh]')) { toast('새로 불러오는 중…'); await renderInsta(true); toast('최신 반응으로 바꿨어요.'); return; }
+  const more = e.target.closest('[data-ig-more]');
+  if (more) {
+    const id = more.dataset.igMore;
+    igOpen.has(id) ? igOpen.delete(id) : igOpen.add(id);
+    const y = window.scrollY; await renderInsta(); window.scrollTo(0, y);
+  }
+});
+
 // ---------- 새 게시물: 1단계 입력 ----------
 const TONE_DEFAULT = ['친근하게', '깔끔하게 정보 위주로', '이벤트 느낌으로', '감성적으로', '고급스럽게'];
 
@@ -1153,6 +1228,7 @@ async function render() {
     else if (state.view === 'post') await openPost(state.postId);
     else if (state.view === 'store') { $app.innerHTML = storeForm(state.store); bindStoreForm(state.store); }
     else if (state.view === 'channels') await renderChannels();
+    else if (state.view === 'insta') await renderInsta();
   } catch (err) {
     if (/가게 정보를 찾을 수 없어요/.test(err.message)) {
       lsDel('gachi.storeId');

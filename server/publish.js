@@ -300,6 +300,50 @@ async function fetchMetrics(platform, conns, pub) {
   throw new Error('알 수 없는 플랫폼');
 }
 
+// ---------- 인스타그램 반응 화면: 좋아요·댓글 수, 인사이트, 댓글 내용 ----------
+// 권한 부족(10, 200)은 어떤 권한이 필요한지 알려 준다
+function permHint(e, perm) {
+  if (e && e.status !== 404 && /권한|permission/i.test(e.message)) return `${perm} 권한이 필요해요. 토큰을 만들 때 ${perm}을 체크했는지 확인해 주세요.`;
+  return e?.message || '불러오지 못했어요.';
+}
+
+async function igReactions(conns, pub) {
+  const { token } = conns.instagram || {};
+  if (!token) throw new Error('인스타그램이 연결되지 않았어요.');
+  const base = igBase(token);
+  const out = { counts: null, insights: null, comments: [], errors: {} };
+
+  // 1) 좋아요·댓글 수 (기본 권한)
+  const d = await call('GET', `${base}/${pub.id}`, { fields: 'like_count,comments_count,permalink,timestamp', access_token: token });
+  out.counts = { likes: d.like_count ?? 0, comments: d.comments_count ?? 0 };
+  out.permalink = d.permalink || pub.url || '';
+
+  // 2) 조회수·도달·저장·공유 (instagram_manage_insights). 반영까지 최대 48시간 걸릴 수 있음
+  try {
+    const ins = await call('GET', `${base}/${pub.id}/insights`, { metric: 'views,reach,saved,shares', access_token: token });
+    const m = {};
+    for (const it of ins.data || []) m[it.name] = it.values?.[0]?.value ?? it.total_value?.value ?? 0;
+    out.insights = m;
+  } catch (e) {
+    out.errors.insights = permHint(e, 'instagram_manage_insights');
+  }
+
+  // 3) 댓글 내용 (instagram_manage_comments). 최신 50개, 답글 포함
+  try {
+    const c = await call('GET', `${base}/${pub.id}/comments`, {
+      fields: 'id,text,username,timestamp,like_count,replies{id,text,username,timestamp}',
+      limit: '50', access_token: token,
+    });
+    out.comments = (c.data || []).map((x) => ({
+      id: x.id, text: x.text || '', username: x.username || '', at: x.timestamp || '', likes: x.like_count ?? 0,
+      replies: (x.replies?.data || []).map((r) => ({ id: r.id, text: r.text || '', username: r.username || '', at: r.timestamp || '' })),
+    }));
+  } catch (e) {
+    out.errors.comments = permHint(e, 'instagram_manage_comments');
+  }
+  return out;
+}
+
 // ---------- SNS 앱에서 직접 지웠는지 확인 ----------
 // true: 아직 있음 / false: 확실히 지워짐 / null: 확인 못 함(네트워크·권한 문제 등)
 async function exists(platform, conns, pub) {
@@ -321,4 +365,4 @@ async function publish(platform, conns, text, photos) {
   throw new Error('알 수 없는 플랫폼');
 }
 
-module.exports = { publish, testConnection, deletePublication, fetchMetrics, exists };
+module.exports = { publish, testConnection, deletePublication, fetchMetrics, exists, igReactions };

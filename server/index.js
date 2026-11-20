@@ -5,7 +5,7 @@ const express = require('express');
 const db = require('./db');
 const llm = require('./llm');
 const connections = require('./connections');
-const { publish, testConnection, deletePublication, fetchMetrics, exists } = require('./publish');
+const { publish, testConnection, deletePublication, fetchMetrics, exists, igReactions } = require('./publish');
 
 db.load();
 connections.load();
@@ -145,6 +145,45 @@ app.post('/api/stores/:id/sync', wrap(async (req, res) => {
   const removed = [];
   for (const p of db.listPosts(store.id)) removed.push(...(await syncPost(p)));
   res.json({ removed });
+}));
+
+// ---------- 인스타그램 반응 화면 ----------
+// 인스타에 올린 게시물마다 좋아요·댓글 수, 조회수 등, 댓글 내용을 모아서 돌려준다 (같은 게시물은 30초 동안 캐시)
+const reactCache = new Map();
+app.get('/api/stores/:id/instagram', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const conns = connections.get();
+  if (!conns.instagram?.token) return res.json({ connected: false, items: [] });
+  const fresh = req.query.refresh === '1';
+  const items = [];
+  const removed = [];
+  for (const post of db.listPosts(store.id)) {
+    const pub = post.publications?.instagram;
+    if (!pub || pub.status !== 'published') continue;
+    let data;
+    const hit = reactCache.get(pub.id);
+    if (!fresh && hit && Date.now() - hit.at < 30000) data = hit.data;
+    else {
+      try {
+        data = await igReactions(conns, pub);
+        reactCache.set(pub.id, { at: Date.now(), data });
+      } catch (e) {
+        if (e.gone) { // 인스타 앱에서 지운 게시물
+          post.publications.instagram = { ...pub, status: 'deleted', deletedAt: db.now(), deletedBy: 'sns' };
+          db.updatePost(post.id, {});
+          removed.push({ postId: post.id, topic: post.topic, platform: 'instagram', name: PLATFORM_NAMES.instagram });
+          continue;
+        }
+        data = { error: e.message };
+      }
+    }
+    const cover = post.images.find((i) => i.id === post.selectedImageIds[0]) || post.images[0];
+    items.push({ postId: post.id, topic: post.topic, caption: post.captions?.instagram || '', at: pub.at, url: pub.url,
+      cover: cover ? `/uploads/${cover.file}` : '', ...data });
+  }
+  items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  res.json({ connected: true, items, removed, fetchedAt: db.now() });
 }));
 
 app.post('/api/posts/:postId/sync', wrap(async (req, res) => {

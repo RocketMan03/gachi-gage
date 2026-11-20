@@ -38,7 +38,7 @@ button { cursor: pointer; }
 }
 main { flex: 1; padding: 16px; display: flex; flex-direction: column; }
 .nav {
-  display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line);
   background: var(--card); position: sticky; bottom: 0; z-index: 5;
 }
 .nav button {
@@ -283,3 +283,22 @@ textarea.cap { min-height: 220px; line-height: 1.7; }
 .pick-badge { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.65); color: #fff; font-style: normal; font-size: 11px; padding: 1px 8px; border-radius: 999px; }
 .pick:hover { background: var(--sunk); }
 .pick.on { border-color: var(--main); box-shadow: 0 0 0 2px var(--main); }
+
+/* ---------- 인스타그램 반응 ---------- */
+.ig-total { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 14px; }
+.ig-total div { background: var(--soft); border-radius: 12px; padding: 10px 8px; text-align: center; }
+.ig-total b { display: block; font-size: 20px; color: var(--main); }
+.ig-total span { font-size: 11px; color: var(--sub); }
+.ig-item { padding: 12px; }
+.ig-item-top { display: flex; gap: 12px; }
+.ig-item-top .post-thumb { width: 64px; height: 80px; }
+.ig-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ig-stats .metric b { margin-left: 2px; }
+.ig-stats .metric.big { background: #fde8ef; color: #b0234f; }
+.ig-comments { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.ig-comment { padding: 8px 0; border-bottom: 1px solid var(--sunk); font-size: 13px; line-height: 1.5; }
+.ig-comment:last-child { border-bottom: 0; }
+.ig-comment .who { font-weight: 700; margin-right: 6px; }
+.ig-comment .when { font-size: 11px; color: var(--sub); margin-left: 6px; }
+.ig-comment .reply { margin: 6px 0 0 14px; padding-left: 10px; border-left: 2px solid var(--line); }
+.ig-note { font-size: 11px; color: var(--warn); margin-top: 6px; }
