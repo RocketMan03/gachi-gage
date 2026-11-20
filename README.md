@@ -98,6 +98,7 @@
 1. Render 서비스 **Settings → Build → Source의 Edit** → Runtime **Node**, Build `npm install`, Start `npm start`
 2. **Environment**에 넣을 값 (토큰은 GitHub나 파일에 넣지 마세요)
    - `INSTAGRAM_TOKEN`, `INSTAGRAM_USER_ID`(필요할 때), `INSTAGRAM_PUBLISH_PIN`
+   - `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_TOKEN` (페이스북 페이지), `THREADS_TOKEN` (스레드)
    - `GEMINI_API_KEY` (없으면 예시 문구로 작동)
 3. 공개 주소는 Render가 주는 `RENDER_EXTERNAL_URL`을 자동으로 써서 터널이 필요 없어요.
 4. 환경변수로 넣은 인스타그램은 '계정 연결' 화면에서 바꿀 수 없어요(공개 사이트라 막아 둠). 게시·삭제할 때는 PIN을 물어요.

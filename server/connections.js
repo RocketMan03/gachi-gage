@@ -21,9 +21,13 @@ function save() {
 // INSTAGRAM_TOKEN, INSTAGRAM_USER_ID, PUBLIC_BASE_URL(없으면 RENDER_EXTERNAL_URL)
 const env = (k) => (process.env[k] || '').trim();
 const igFromEnv = () => !!env('INSTAGRAM_TOKEN');
+const fbFromEnv = () => !!(env('FACEBOOK_PAGE_TOKEN') && env('FACEBOOK_PAGE_ID'));
+const thFromEnv = () => !!env('THREADS_TOKEN');
 
 function get() {
   const c = { ...conns };
+  if (fbFromEnv()) c.facebook = { pageId: env('FACEBOOK_PAGE_ID'), token: env('FACEBOOK_PAGE_TOKEN') };
+  if (thFromEnv()) c.threads = { token: env('THREADS_TOKEN') };
   if (igFromEnv()) c.instagram = { token: env('INSTAGRAM_TOKEN'), igUserId: env('INSTAGRAM_USER_ID') || conns.instagram.igUserId || '' };
   const base = env('PUBLIC_BASE_URL') || env('RENDER_EXTERNAL_URL');
   if (base) c.publicBaseUrl = base.replace(/\/+$/, '');
@@ -41,7 +45,7 @@ function checkPin(v) {
 const clean = (v) => (typeof v === 'string' ? v.trim() : '');
 
 function update(body) {
-  if (body.facebook) {
+  if (body.facebook && !fbFromEnv()) {
     conns.facebook = {
       pageId: clean(body.facebook.pageId) || conns.facebook.pageId || '',
       token: clean(body.facebook.token) || conns.facebook.token || '',
@@ -53,7 +57,7 @@ function update(body) {
       igUserId: clean(body.instagram.igUserId) || conns.instagram.igUserId || '',
     };
   }
-  if (body.threads) {
+  if (body.threads && !thFromEnv()) {
     conns.threads = { token: clean(body.threads.token) || conns.threads.token || '' };
   }
   if (typeof body.publicBaseUrl === 'string' && !env('PUBLIC_BASE_URL') && !env('RENDER_EXTERNAL_URL')) {
@@ -71,7 +75,7 @@ function view() {
   const ig = conns.instagram || {};
   return {
     pinRequired: !!pin(),
-    envManaged: { instagram: igFromEnv(), publicBaseUrl: !!(env('PUBLIC_BASE_URL') || env('RENDER_EXTERNAL_URL')) },
+    envManaged: { instagram: igFromEnv(), facebook: fbFromEnv(), threads: thFromEnv(), publicBaseUrl: !!(env('PUBLIC_BASE_URL') || env('RENDER_EXTERNAL_URL')) },
     facebook: { connected: !!(conns.facebook.token && conns.facebook.pageId), pageId: conns.facebook.pageId || '', token: mask(conns.facebook.token) },
     instagram: { connected: !!ig.token, igUserId: ig.igUserId || '', token: mask(ig.token),
       // 인스타 삭제 API는 페이스북 로그인 방식 토큰(EAA…)에서만 된다

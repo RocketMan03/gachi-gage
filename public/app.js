@@ -1105,15 +1105,26 @@ async function renderChannels() {
       { key: 'igUserId', label: '인스타그램 계정 ID', hint: '(IGAA 토큰이면 비워 두세요)', ph: '페이스북 로그인 방식일 때만' },
     ], '① 인스타그램 계정을 <b>프로페셔널(비즈니스/크리에이터)</b>로 전환<br>② <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>에서 앱 만들기 → 사용 사례에서 Instagram API 추가<br>③ "Instagram 로그인으로 API 설정" → 계정 추가 → <b>토큰 생성</b> (instagram_business_basic, instagram_business_content_publish 권한)<br>※ 이 앱에서 게시물을 지우려면 <b>페이스북 로그인 방식 토큰(EAA…)</b>에 instagram_manage_contents 권한이 있어야 해요. 인스타그램 앱에서 지우면 여기에도 자동으로 반영돼요.<br>※ 개발 모드에서는 앱에 등록한 본인 계정으로만 올릴 수 있어요. 메뉴 이름은 Meta 화면 개편에 따라 조금 다를 수 있어요.')}
 
-    ${channelCard('facebook', '📘 페이스북 페이지', c.facebook || {}, [
+    ${c.envManaged?.facebook ? `<div class="card"><div class="week-head"><h2 style="margin:0">📘 페이스북 페이지</h2><span class="pf-state on">● 연결됨</span></div>
+      <p class="hint" style="margin:6px 0 0">서버 환경변수(FACEBOOK_PAGE_ID, FACEBOOK_PAGE_TOKEN)로 연결돼 있어요. 바꾸려면 서버(Render → Environment 또는 .env)에서 바꿔 주세요.</p>
+      <div class="row"><button class="btn line" data-fb-test>연결 확인</button></div></div>`
+    : channelCard('facebook', '📘 페이스북 페이지', c.facebook || {}, [
       { key: 'pageId', label: '페이지 ID', ph: '숫자로 된 페이지 ID' },
       { key: 'token', label: '페이지 액세스 토큰', secret: true, ph: 'EAA… 로 시작하는 토큰' },
     ], '① 페이스북 <b>페이지</b>가 있어야 해요 (개인 프로필에는 API로 못 올려요)<br>② <a href="https://developers.facebook.com/tools/explorer" target="_blank" rel="noopener">그래프 API 탐색기</a>에서 내 앱 선택 → 권한 pages_manage_posts, pages_read_engagement 추가 → 토큰 생성<br>③ "사용자 또는 페이지"에서 내 페이지를 골라 <b>페이지 토큰</b>으로 바꾸기<br>④ 탐색기에서 <code>me/accounts</code>를 조회하면 페이지 ID가 나와요<br>※ 탐색기 토큰은 1~2시간이면 만료돼요. 시연 직전에 새로 받거나 장기 토큰으로 바꿔 두세요.')}
 
-    ${channelCard('threads', '🧵 스레드', c.threads || {}, [
+    ${c.envManaged?.threads ? `<div class="card"><div class="week-head"><h2 style="margin:0">🧵 스레드</h2><span class="pf-state on">● 연결됨</span></div>
+      <p class="hint" style="margin:6px 0 0">서버 환경변수(THREADS_TOKEN)로 연결돼 있어요.</p></div>`
+    : channelCard('threads', '🧵 스레드', c.threads || {}, [
       { key: 'token', label: '액세스 토큰', secret: true, ph: 'TH… 로 시작하는 토큰' },
     ], '① <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>에서 앱 만들기 → 사용 사례에서 <b>Threads API</b> 선택<br>② 권한 threads_basic, threads_content_publish 추가 (게시물 삭제는 threads_delete, 반응 보기는 threads_manage_insights도)<br>③ 역할 → 스레드 테스터에 내 계정 추가 → 스레드 앱 설정에서 초대 수락<br>④ 사용자 토큰 생성기에서 토큰 만들기<br>※ 글자 수 500자, 해시태그 1개 제한이 있어요.')}`;
 }
+
+$app.addEventListener('click', async (e) => {
+  if (!e.target.closest('[data-fb-test]')) return;
+  const r = await fetch('/api/connections/facebook/test', { method: 'POST' }).then((x) => x.json()).catch(() => ({ error: '서버에 연결하지 못했어요.' }));
+  if (r.ok) toast(`✅ ${r.message}`); else alertBox(`연결 확인 실패\n\n${r.error}`);
+});
 
 $app.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-ch-act]');
