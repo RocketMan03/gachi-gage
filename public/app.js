@@ -984,7 +984,7 @@ async function renderChannels() {
 
     <div class="card summary" data-ch="public">
       <div class="label">공개 주소 (인스타그램·스레드에 사진 올릴 때 필요)</div>
-      <p style="margin:4px 0 0">인스타그램과 스레드는 Meta 서버가 사진을 <b>인터넷 주소로 가져가는</b> 방식이라 localhost로는 사진이 안 올라가요. 폴더의 <b>tunnel.bat</b>을 실행하면 나오는 <b>https://….trycloudflare.com</b> 주소를 넣어 주세요. (페이스북과 글만 올리는 스레드는 없어도 돼요)</p>
+      <p style="margin:4px 0 0">인스타그램과 스레드는 Meta 서버가 사진을 <b>인터넷 주소로 가져가는</b> 방식이라 localhost로는 사진이 안 올라가요. 폴더의 <b>tunnel.bat</b>을 실행하면 나오는 <b>https://….trycloudflare.com</b> 주소를 넣어 주세요. <b>또는 그 주소로 이 앱을 열면</b> 따로 넣지 않아도 돼요. (페이스북과 글만 올리는 스레드는 없어도 돼요)</p>
       ${c.envManaged?.publicBaseUrl ? `<p style="margin:10px 0 0"><b>${esc(c.publicBaseUrl)}</b> · 배포 서버 주소를 자동으로 써요.</p>`
       : `<input data-k="publicBaseUrl" value="${esc(c.publicBaseUrl)}" placeholder="예: https://abc-def.trycloudflare.com" style="margin-top:10px" />
       <div class="row"><button class="btn primary" data-ch-act="save-public">공개 주소 저장</button></div>`}

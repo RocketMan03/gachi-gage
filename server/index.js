@@ -287,6 +287,14 @@ app.post('/api/posts/:postId/publish', wrap(async (req, res) => {
     .filter(Boolean)
     .map((i) => ({ ...i, path: path.join(UPLOAD_DIR, i.file) }));
   const conns = connections.get();
+  // 공개 주소를 안 넣었어도, 터널 주소(https://….trycloudflare.com 등)로 앱을 열었다면 그 주소를 쓴다
+  if (!conns.publicBaseUrl) {
+    const host = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+    if (host && !/^(localhost|127\.|192\.168\.|10\.|\[?::1)/.test(host)) {
+      const proto = /trycloudflare\.com$/.test(host) ? 'https' : (req.get('x-forwarded-proto') || req.protocol).split(',')[0];
+      conns.publicBaseUrl = `${proto}://${host}`;
+    }
+  }
   const results = [];
   for (const platform of platforms) {
     const text = (post.captions?.[platform] || '').trim();
