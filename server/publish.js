@@ -59,6 +59,28 @@ async function waitReady(base, containerId, token, field) {
   throw new Error('사진 처리가 너무 오래 걸려요. 잠시 후 다시 시도해 주세요.');
 }
 
+// 공개 주소로 사진이 실제로 열리는지 먼저 확인 (터널이 꺼졌거나 주소가 바뀐 경우를 바로 알려 주려고)
+async function checkReachable(url) {
+  let res;
+  try {
+    res = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(10000) });
+  } catch (e) {
+    throw new Error(`공개 주소로 사진이 열리지 않아요 (${url.split('/uploads/')[0]}). tunnel.bat 창이 켜져 있는지, 주소가 지금 터널 창에 나온 주소와 같은지 확인해 주세요.`);
+  }
+  if (!res.ok) throw new Error(`공개 주소로 사진을 열었더니 오류가 났어요 (HTTP ${res.status}). 터널 주소가 바뀌었는지 확인해 주세요.`);
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.startsWith('image/')) throw new Error(`공개 주소가 사진 대신 다른 페이지를 보여줘요 (${ct}). 터널 주소를 다시 확인해 주세요.`);
+}
+async function retryFetchFail(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!/가져올 수 없|download|9004/i.test(e.message)) throw e;
+    await sleep(5000);
+    return fn();
+  }
+}
+
 function photoUrls(photos, publicBaseUrl, platformName) {
   if (!photos.length) return [];
   if (!publicBaseUrl) {
@@ -128,9 +150,12 @@ async function postInstagram(conn, text, photos, publicBaseUrl) {
   let igId = conn.igUserId;
   if (!igId) igId = await findIgUserId(token);
 
+  await checkReachable(urls[0]);
+
   let creationId;
   if (urls.length === 1) {
-    creationId = (await call('POST', `${base}/${igId}/media`, { image_url: urls[0], caption: text, access_token: token })).id;
+    // 새로 만든 터널 주소는 Meta 쪽에서 바로 못 찾을 때가 있어서 한 번 더 시도
+    creationId = (await retryFetchFail(() => call('POST', `${base}/${igId}/media`, { image_url: urls[0], caption: text, access_token: token }))).id;
   } else {
     const children = [];
     for (const u of urls) {
