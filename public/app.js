@@ -92,6 +92,46 @@ function confirmBox(html, okLabel = '확인') {
   });
 }
 
+// 게시 PIN 입력 (서버에 INSTAGRAM_PUBLISH_PIN이 있을 때만). 취소하면 null
+function pinBox(title) {
+  if (!state.connections?.pinRequired) return Promise.resolve('');
+  return new Promise((resolve) => {
+    let done = false;
+    const m = modal(`<div class="fact-title" style="margin-top:0">${esc(title)}</div><p class="hint">팀에서 정한 게시 PIN을 넣어 주세요.</p>
+      <input data-pin inputmode="numeric" autocomplete="off" placeholder="게시 PIN" />
+      <div class="row"><button class="btn primary" data-m="ok">확인</button><button class="btn line" data-m="close">취소</button></div>`, (e, close) => {
+      if (e.target.closest('[data-m=ok]')) { done = true; const v = m.el.querySelector('[data-pin]').value; close(); resolve(v); }
+    });
+    m.el.querySelector('[data-pin]').focus();
+    m.el.querySelector('[data-pin]').addEventListener('keydown', (e) => { if (e.key === 'Enter') m.el.querySelector('[data-m=ok]').click(); });
+    new MutationObserver(() => { if (!document.body.contains(m.el) && !done) resolve(null); }).observe(document.body, { childList: true });
+  });
+}
+
+// ---------- SNS 앱에서 직접 지운 게시물 반영 ----------
+function removedToast(removed) {
+  if (!removed?.length) return;
+  const r = removed[0];
+  toast(`${r.name}에서 지운 '${r.topic}' 게시물을 삭제됨으로 바꿨어요${removed.length > 1 ? ` (외 ${removed.length - 1}건)` : ''}`);
+}
+let syncing = false;
+async function snsSync(force) {
+  if (syncing || !state.storeId) return;
+  syncing = true;
+  try {
+    if (state.view === 'post' && state.post) {
+      if (!Object.values(state.post.publications || {}).some((p) => p.status === 'published')) return;
+      const { post, removed } = await api('POST', `/api/posts/${state.post.id}/sync`, { force: !!force });
+      if (removed.length && state.view === 'post' && state.post?.id === post.id) { await refreshPost(post); removedToast(removed); }
+    } else if (state.view === 'posts') {
+      const { removed } = await api('POST', `/api/stores/${state.storeId}/sync`, {});
+      if (removed.length && state.view === 'posts') { await renderPosts(); removedToast(removed); }
+    }
+  } catch {} finally { syncing = false; }
+}
+// 인스타그램 앱에서 지우고 돌아오면 바로 확인
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') snsSync(true); });
+
 function setView(view, extra = {}) {
   Object.assign(state, extra);
   state.view = view;
@@ -490,15 +530,16 @@ function publicationsHtml(post) {
       return `<div class="pub-row">
         <div class="pub-main">
           <div><b>${pf.icon} ${pf.name}</b> <span class="status-badge ${p.status}">${p.status === 'published' ? '게시됨' : p.status === 'failed' ? '실패' : '삭제됨'}</span></div>
-          <div class="hint">${fmtDate(p.at)}${p.status === 'failed' ? ` · ${esc(p.error)}` : ''}</div>
+          <div class="hint">${fmtDate(p.at)}${p.status === 'failed' ? ` · ${esc(p.error)}` : ''}${p.status === 'deleted' && p.deletedBy === 'sns' ? ` · ${pf.name} 앱에서 지워졌어요` : ''}</div>
           ${metrics ? `<div class="metrics">${metrics}</div>` : ''}
         </div>
         <div class="pub-acts">
           ${p.status === 'published' && p.url ? `<a class="btn line sm" href="${esc(p.url)}" target="_blank" rel="noopener">보기</a>` : ''}
-          ${p.status === 'published' ? `<button class="btn line sm" data-del-pub="${pf.id}">삭제</button>` : `<button class="btn line sm" data-reset-pub="${pf.id}">다시 올리기</button>`}
+          ${p.status === 'published' ? (pf.id !== 'instagram' || state.connections?.instagram?.canDelete ? `<button class="btn line sm" data-del-pub="${pf.id}">삭제</button>` : '') : `<button class="btn line sm" data-reset-pub="${pf.id}">다시 올리기</button>`}
         </div>
       </div>`;
     }).join('')}
+    <p class="hint" style="margin:8px 0 0">SNS 앱에서 직접 지워도 여기에 자동으로 반영돼요.</p>
   </div>`;
 }
 
@@ -587,6 +628,7 @@ async function openPost(postId) {
   state.post = await api('GET', `/api/posts/${postId}`);
   state.postId = postId;
   renderPostView();
+  snsSync(true);
 }
 
 async function refreshPost(post) {
@@ -724,9 +766,11 @@ async function publishNow() {
     <p class="hint">사진 ${imgs.length}장 · 올린 뒤에는 각 앱에서 바로 보여요.</p>
     ${imgs.length ? `<div class="thumbs">${imgs.slice(0, 5).map((im) => `<div class="thumb"><img src="${imgUrl(im)}" alt="" /></div>`).join('')}</div>` : ''}`, '올리기');
   if (!ok) return;
+  const pin = await pinBox('게시 PIN');
+  if (pin === null) return;
   loading('올리는 중이에요… (사진이 많으면 1분 정도 걸려요)');
   try {
-    const { results, post: p } = await api('POST', `/api/posts/${post.id}/publish`, { platforms: chosen });
+    const { results, post: p } = await api('POST', `/api/posts/${post.id}/publish`, { platforms: chosen, pin });
     state.post = p;
     renderPostView();
     window.scrollTo(0, 0);
@@ -839,8 +883,10 @@ $app.addEventListener('click', async (e) => {
     }
     if ((el = t('[data-del-pub]'))) {
       const pf = PF[el.dataset.delPub];
-      if (!(await confirmBox(`<b>${pf.name}</b>에 올린 게시물을 지울까요?<p class="hint">지운 게시물은 되돌릴 수 없어요.</p>`, '지우기'))) return;
-      try { await refreshPost(await api('POST', `/api/posts/${state.post.id}/publications/${pf.id}/delete`)); toast(`${pf.name} 게시물을 지웠어요.`); }
+      if (!(await confirmBox(`<b>${pf.name}</b>에 올린 게시물을 지울까요?<p class="hint">좋아요와 댓글도 함께 사라지고 되돌릴 수 없어요.</p>`, '지우기'))) return;
+      const pin = await pinBox('게시 PIN');
+      if (pin === null) return;
+      try { await refreshPost(await api('POST', `/api/posts/${state.post.id}/publications/${pf.id}/delete`, { pin })); toast(`${pf.name} 게시물을 지웠어요.`); }
       catch (err) { alertBox(err.message); }
       return;
     }
@@ -939,14 +985,18 @@ async function renderChannels() {
     <div class="card summary" data-ch="public">
       <div class="label">공개 주소 (인스타그램·스레드에 사진 올릴 때 필요)</div>
       <p style="margin:4px 0 0">인스타그램과 스레드는 Meta 서버가 사진을 <b>인터넷 주소로 가져가는</b> 방식이라 localhost로는 사진이 안 올라가요. 폴더의 <b>tunnel.bat</b>을 실행하면 나오는 <b>https://….trycloudflare.com</b> 주소를 넣어 주세요. (페이스북과 글만 올리는 스레드는 없어도 돼요)</p>
-      <input data-k="publicBaseUrl" value="${esc(c.publicBaseUrl)}" placeholder="예: https://abc-def.trycloudflare.com" style="margin-top:10px" />
-      <div class="row"><button class="btn primary" data-ch-act="save-public">공개 주소 저장</button></div>
+      ${c.envManaged?.publicBaseUrl ? `<p style="margin:10px 0 0"><b>${esc(c.publicBaseUrl)}</b> · 배포 서버 주소를 자동으로 써요.</p>`
+      : `<input data-k="publicBaseUrl" value="${esc(c.publicBaseUrl)}" placeholder="예: https://abc-def.trycloudflare.com" style="margin-top:10px" />
+      <div class="row"><button class="btn primary" data-ch-act="save-public">공개 주소 저장</button></div>`}
     </div>
 
-    ${channelCard('instagram', '📸 인스타그램', c.instagram || {}, [
+    ${c.envManaged?.instagram ? `<div class="card"><div class="week-head"><h2 style="margin:0">📸 인스타그램</h2><span class="pf-state on">● 연결됨</span></div>
+      <p class="hint" style="margin:6px 0 0">서버 환경변수(INSTAGRAM_TOKEN)로 연결돼 있어요. 토큰을 바꾸려면 서버(Render → Environment)에서 바꿔 주세요.<br>
+      ${c.instagram?.canDelete ? '이 앱에서 올린 게시물을 지울 수 있어요.' : '인스타그램 로그인 토큰이라 삭제는 인스타그램 앱에서 해 주세요.'} 인스타그램 앱에서 지우면 여기에도 자동으로 반영돼요.</p></div>`
+    : channelCard('instagram', '📸 인스타그램', c.instagram || {}, [
       { key: 'token', label: '액세스 토큰', secret: true, ph: 'IGAA… 로 시작하는 토큰' },
       { key: 'igUserId', label: '인스타그램 계정 ID', hint: '(IGAA 토큰이면 비워 두세요)', ph: '페이스북 로그인 방식일 때만' },
-    ], '① 인스타그램 계정을 <b>프로페셔널(비즈니스/크리에이터)</b>로 전환<br>② <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>에서 앱 만들기 → 사용 사례에서 Instagram API 추가<br>③ "Instagram 로그인으로 API 설정" → 계정 추가 → <b>토큰 생성</b> (instagram_business_basic, instagram_business_content_publish 권한)<br>※ 개발 모드에서는 앱에 등록한 본인 계정으로만 올릴 수 있어요. 인스타그램은 API로 게시물 삭제가 안 돼요. 메뉴 이름은 Meta 화면 개편에 따라 조금 다를 수 있어요.')}
+    ], '① 인스타그램 계정을 <b>프로페셔널(비즈니스/크리에이터)</b>로 전환<br>② <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers</a>에서 앱 만들기 → 사용 사례에서 Instagram API 추가<br>③ "Instagram 로그인으로 API 설정" → 계정 추가 → <b>토큰 생성</b> (instagram_business_basic, instagram_business_content_publish 권한)<br>※ 이 앱에서 게시물을 지우려면 <b>페이스북 로그인 방식 토큰(EAA…)</b>에 instagram_manage_contents 권한이 있어야 해요. 인스타그램 앱에서 지우면 여기에도 자동으로 반영돼요.<br>※ 개발 모드에서는 앱에 등록한 본인 계정으로만 올릴 수 있어요. 메뉴 이름은 Meta 화면 개편에 따라 조금 다를 수 있어요.')}
 
     ${channelCard('facebook', '📘 페이스북 페이지', c.facebook || {}, [
       { key: 'pageId', label: '페이지 ID', ph: '숫자로 된 페이지 ID' },
@@ -1098,7 +1148,7 @@ async function render() {
   try {
     if (!state.store) state.store = await api('GET', `/api/stores/${state.storeId}`);
     await loadConnections();
-    if (state.view === 'posts') await renderPosts();
+    if (state.view === 'posts') { await renderPosts(); snsSync(); }
     else if (state.view === 'new') renderNew();
     else if (state.view === 'post') await openPost(state.postId);
     else if (state.view === 'store') { $app.innerHTML = storeForm(state.store); bindStoreForm(state.store); }

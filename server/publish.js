@@ -13,6 +13,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function friendlyError(data, status) {
   const e = data?.error || {};
   let msg = e.error_user_msg || e.message || `요청 실패 (HTTP ${status})`;
+  // 게시물이 이미 없어진 경우 (앱에서 직접 지운 경우 등)
+  const gone = status === 404 || e.error_subcode === 33 || (e.code === 100 && /does not exist/i.test(e.message || ''));
+  if (gone) {
+    const err = new Error('이 게시물은 이미 지워졌어요.');
+    err.status = status;
+    err.gone = true;
+    return err;
+  }
   if (e.code === 190) msg = `토큰이 만료됐거나 올바르지 않아요. '계정 연결' 메뉴에서 토큰을 다시 넣어 주세요. (${e.message || ''})`;
   if (e.code === 10 || e.code === 200) msg = `권한이 부족해요. 토큰을 만들 때 게시 권한을 체크했는지 확인해 주세요. (${e.message || ''})`;
   const err = new Error(msg);
@@ -20,11 +28,11 @@ function friendlyError(data, status) {
   return err;
 }
 
-async function call(method, url, params = {}, formData) {
+async function call(method, url, params = {}, formData, timeoutMs) {
   let res;
   if (method === 'GET') {
     const qs = new URLSearchParams(params).toString();
-    res = await fetch(`${url}?${qs}`);
+    res = await fetch(`${url}?${qs}`, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
   } else if (formData) {
     res = await fetch(url, { method: 'POST', body: formData });
   } else {
@@ -93,6 +101,19 @@ async function postFacebook(conn, text, photos) {
 }
 
 // ---------- 인스타그램 ----------
+const igBase = (token) => (token.startsWith('IG') ? `${IG()}/${VER()}` : `${FB()}/${VER()}`);
+
+// 인스타그램 계정 ID 찾기: IG 토큰은 /me, 페이스북 로그인(EAA) 토큰은 연결된 페이지의 instagram_business_account
+async function findIgUserId(token) {
+  if (token.startsWith('IG')) {
+    const me = await call('GET', `${IG()}/${VER()}/me`, { fields: 'user_id,username', access_token: token });
+    return me.user_id || me.id;
+  }
+  const d = await call('GET', `${FB()}/${VER()}/me/accounts`, { fields: 'instagram_business_account', access_token: token });
+  const hit = (d.data || []).find((p) => p.instagram_business_account?.id);
+  if (!hit) throw new Error('이 토큰으로 연결된 인스타그램 비즈니스 계정을 찾지 못했어요. 인스타그램 계정 ID(INSTAGRAM_USER_ID)를 직접 넣어 주세요.');
+  return hit.instagram_business_account.id;
+}
 async function postInstagram(conn, text, photos, publicBaseUrl) {
   const { token } = conn;
   if (!token) throw new Error('인스타그램이 연결되지 않았어요.');
@@ -105,11 +126,7 @@ async function postInstagram(conn, text, photos, publicBaseUrl) {
   const igLogin = token.startsWith('IG');
   const base = igLogin ? `${IG()}/${VER()}` : `${FB()}/${VER()}`;
   let igId = conn.igUserId;
-  if (!igId) {
-    if (!igLogin) throw new Error('페이스북 로그인 방식 토큰이면 인스타그램 비즈니스 계정 ID도 넣어 주세요.');
-    const me = await call('GET', `${base}/me`, { fields: 'user_id,username', access_token: token });
-    igId = me.user_id || me.id;
-  }
+  if (!igId) igId = await findIgUserId(token);
 
   let creationId;
   if (urls.length === 1) {
@@ -178,8 +195,8 @@ async function testConnection(platform, conns) {
       const d = await call('GET', `${IG()}/${VER()}/me`, { fields: 'user_id,username', access_token: token });
       return `인스타그램 @${d.username} 연결 확인`;
     }
-    if (!igUserId) throw new Error('페이스북 로그인 방식 토큰이면 인스타그램 비즈니스 계정 ID도 넣어 주세요.');
-    const d = await call('GET', `${FB()}/${VER()}/${igUserId}`, { fields: 'username', access_token: token });
+    const id = igUserId || (await findIgUserId(token));
+    const d = await call('GET', `${FB()}/${VER()}/${id}`, { fields: 'username', access_token: token });
     return `인스타그램 @${d.username} 연결 확인`;
   }
   if (platform === 'threads') {
@@ -201,7 +218,18 @@ async function callDelete(url, token) {
 
 async function deletePublication(platform, conns, pub) {
   if (platform === 'instagram') {
-    throw new Error('인스타그램은 공식 API로 게시물을 지울 수 없어요. "게시물 보기"를 눌러 인스타그램 앱에서 직접 삭제해 주세요.');
+    // 2025년 12월부터 페이스북 로그인 방식 토큰 + instagram_manage_contents 권한으로 삭제 가능
+    const { token } = conns.instagram;
+    if (!token) throw new Error('인스타그램이 연결되지 않았어요.');
+    if (token.startsWith('IG')) throw new Error('지금 연결 방식(인스타그램 로그인 토큰)으로는 Meta가 삭제를 지원하지 않아요. "보기"를 눌러 인스타그램 앱에서 직접 지워 주세요.');
+    try {
+      const d = await callDelete(`${FB()}/${VER()}/${pub.id}`, token);
+      if (d.success === false) throw new Error('인스타그램이 삭제를 끝내지 못했어요. 인스타그램 앱에서 확인해 주세요.');
+    } catch (e) {
+      if (!e.gone && /권한/.test(e.message)) throw new Error(`삭제 권한이 없어요. 토큰을 만들 때 instagram_manage_contents 권한을 추가하거나, 인스타그램 앱에서 직접 지워 주세요. (${e.message})`);
+      throw e;
+    }
+    return;
   }
   if (platform === 'facebook') {
     await callDelete(`${FB()}/${VER()}/${pub.id}`, conns.facebook.token);
@@ -223,8 +251,7 @@ async function deletePublication(platform, conns, pub) {
 async function fetchMetrics(platform, conns, pub) {
   if (platform === 'instagram') {
     const { token } = conns.instagram;
-    const base = token.startsWith('IG') ? `${IG()}/${VER()}` : `${FB()}/${VER()}`;
-    const d = await call('GET', `${base}/${pub.id}`, { fields: 'like_count,comments_count', access_token: token });
+    const d = await call('GET', `${igBase(token)}/${pub.id}`, { fields: 'like_count,comments_count', access_token: token });
     return { 좋아요: d.like_count ?? 0, 댓글: d.comments_count ?? 0 };
   }
   if (platform === 'facebook') {
@@ -248,6 +275,20 @@ async function fetchMetrics(platform, conns, pub) {
   throw new Error('알 수 없는 플랫폼');
 }
 
+// ---------- SNS 앱에서 직접 지웠는지 확인 ----------
+// true: 아직 있음 / false: 확실히 지워짐 / null: 확인 못 함(네트워크·권한 문제 등)
+async function exists(platform, conns, pub) {
+  const token = conns[platform]?.token;
+  if (!token || !pub?.id) return null;
+  const base = platform === 'instagram' ? igBase(token) : platform === 'facebook' ? `${FB()}/${VER()}` : `${TH()}/v1.0`;
+  try {
+    await call('GET', `${base}/${pub.id}`, { fields: 'id', access_token: token }, null, 8000);
+    return true;
+  } catch (e) {
+    return e.gone ? false : null;
+  }
+}
+
 async function publish(platform, conns, text, photos) {
   if (platform === 'facebook') return postFacebook(conns.facebook, text, photos);
   if (platform === 'instagram') return postInstagram(conns.instagram, text, photos, conns.publicBaseUrl);
@@ -255,4 +296,4 @@ async function publish(platform, conns, text, photos) {
   throw new Error('알 수 없는 플랫폼');
 }
 
-module.exports = { publish, testConnection, deletePublication, fetchMetrics };
+module.exports = { publish, testConnection, deletePublication, fetchMetrics, exists };

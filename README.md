@@ -60,7 +60,8 @@
 | 페이스북 페이지 게시 (글 / 사진 1장 / 여러 장) | Graph API `/{page}/feed`, `/{page}/photos` | mock 서버로 확인 |
 | 인스타그램 게시 (사진 1장 / 캐러셀) | Instagram Content Publishing API | mock 서버로 확인 · 공개 주소(터널) 필요 |
 | 스레드 게시 (글 / 사진 / 캐러셀) | Threads API | mock 서버로 확인 · 사진은 공개 주소 필요 |
-| 게시물 삭제 | 페이스북·스레드 DELETE (인스타는 API 미지원 → 앱에서 직접) | mock 서버로 확인 |
+| 게시물 삭제 | 페이스북·스레드·인스타그램 DELETE (인스타는 EAA 토큰 + instagram_manage_contents) | mock 서버로 확인 |
+| SNS 앱에서 직접 지운 게시물 반영 | 각 게시물 ID 조회 → 없으면 '삭제됨'으로 표시 | mock 서버로 확인 |
 | 반응 보기 (좋아요·댓글 등) | IG media 필드, FB reactions/comments, Threads insights | mock 서버로 확인 · 토큰 권한 필요 |
 | 계정 연결 확인 | 각 API `/me`, `/{page}` 조회 | mock 서버로 확인 |
 
@@ -82,10 +83,25 @@
 | 플랫폼 | 글만 | 사진 | 공개 주소 필요 | API 삭제 | 반응 보기 |
 |---|---|---|---|---|---|
 | 페이스북 페이지 | O | 1~10장 | X (파일 직접 업로드) | O | O (pages_read_engagement) |
-| 인스타그램 (프로페셔널 계정) | X | 1~10장 (캐러셀) | O | X (앱에서 직접) | O |
+| 인스타그램 (프로페셔널 계정) | X | 1~10장 (캐러셀) | O | EAA 토큰일 때 O | O |
 | 스레드 | O (500자) | 1~10장 | 사진 있을 때만 O | O (threads_delete) | O (threads_manage_insights) |
 
 **공개 주소**: 인스타그램·스레드는 Meta 서버가 사진을 URL로 가져가요. `start.bat`을 켠 상태에서 `tunnel.bat`을 실행하면 나오는 `https://….trycloudflare.com` 주소를 계정 연결 화면의 공개 주소 칸에 넣어 주세요. 터널이 켜져 있는 동안은 주소를 아는 사람 누구나 이 서비스에 접속할 수 있으니, 시연이 끝나면 터널 창을 닫아 주세요.
+
+## SNS 앱에서 직접 지운 게시물
+
+내 게시물 목록이나 게시물 화면을 열 때, 그리고 인스타그램 앱에서 지우고 이 화면으로 돌아올 때 게시물이 아직 있는지 확인해요.
+지워졌으면 '삭제됨'(○○ 앱에서 지워졌어요)으로 바뀌고 **다시 올리기**를 할 수 있어요. 같은 게시물은 30초에 한 번만 확인해요.
+
+## Render에 배포하기
+
+1. Render 서비스 **Settings → Build → Source의 Edit** → Runtime **Node**, Build `npm install`, Start `npm start`
+2. **Environment**에 넣을 값 (토큰은 GitHub나 파일에 넣지 마세요)
+   - `INSTAGRAM_TOKEN`, `INSTAGRAM_USER_ID`(필요할 때), `INSTAGRAM_PUBLISH_PIN`
+   - `GEMINI_API_KEY` (없으면 예시 문구로 작동)
+3. 공개 주소는 Render가 주는 `RENDER_EXTERNAL_URL`을 자동으로 써서 터널이 필요 없어요.
+4. 환경변수로 넣은 인스타그램은 '계정 연결' 화면에서 바꿀 수 없어요(공개 사이트라 막아 둠). 게시·삭제할 때는 PIN을 물어요.
+5. 무료 요금제는 재시작하면 `data/`(게시물·사진)가 지워질 수 있어요.
 
 ## 구조
 

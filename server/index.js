@@ -5,7 +5,7 @@ const express = require('express');
 const db = require('./db');
 const llm = require('./llm');
 const connections = require('./connections');
-const { publish, testConnection, deletePublication, fetchMetrics } = require('./publish');
+const { publish, testConnection, deletePublication, fetchMetrics, exists } = require('./publish');
 
 db.load();
 connections.load();
@@ -110,10 +110,49 @@ function needPost(req, res) {
   return post;
 }
 
+// ---------- SNS 앱에서 직접 지운 게시물 반영 ----------
+const SYNC_EVERY_MS = 30 * 1000; // 같은 게시물은 30초에 한 번만 확인
+async function syncPost(post, { force = false } = {}) {
+  const conns = connections.get();
+  const removed = [];
+  let changed = false;
+  for (const [platform, pub] of Object.entries(post.publications || {})) {
+    if (pub.status !== 'published') continue;
+    if (!force && pub.checkedAt && Date.now() - pub.checkedAt < SYNC_EVERY_MS) continue;
+    const ok = await exists(platform, conns, pub);
+    if (ok === false) {
+      post.publications[platform] = { ...pub, status: 'deleted', deletedAt: db.now(), deletedBy: 'sns' };
+      removed.push({ postId: post.id, topic: post.topic, platform, name: PLATFORM_NAMES[platform] });
+      changed = true;
+    } else if (ok === true) {
+      pub.checkedAt = Date.now();
+      changed = true;
+    }
+  }
+  if (changed) db.updatePost(post.id, {});
+  return removed;
+}
+
 app.get('/api/stores/:id/posts', (req, res) => {
   const store = needStore(req, res);
   if (store) res.json(db.listPosts(store.id).map(withStatus));
 });
+
+// 내 게시물 전체 확인 (목록 화면을 연 뒤 뒤에서 부름)
+app.post('/api/stores/:id/sync', wrap(async (req, res) => {
+  const store = needStore(req, res);
+  if (!store) return;
+  const removed = [];
+  for (const p of db.listPosts(store.id)) removed.push(...(await syncPost(p)));
+  res.json({ removed });
+}));
+
+app.post('/api/posts/:postId/sync', wrap(async (req, res) => {
+  const post = needPost(req, res);
+  if (!post) return;
+  const removed = await syncPost(post, { force: !!req.body?.force });
+  res.json({ post: withStatus(post), removed });
+}));
 
 app.post('/api/stores/:id/posts', (req, res) => {
   const store = needStore(req, res);
@@ -242,6 +281,7 @@ app.post('/api/posts/:postId/publish', wrap(async (req, res) => {
   if (!post) return;
   const platforms = (Array.isArray(req.body?.platforms) ? req.body.platforms : []).filter((p) => PLATFORM_NAMES[p]);
   if (!platforms.length) return res.status(400).json({ error: '올릴 곳을 하나 이상 골라 주세요.' });
+  if (!connections.checkPin(req.body?.pin)) return res.status(403).json({ error: '게시 PIN이 맞지 않아요.' });
   const photos = post.selectedImageIds
     .map((id) => post.images.find((i) => i.id === id))
     .filter(Boolean)
@@ -278,12 +318,16 @@ app.post('/api/posts/:postId/publications/:platform/delete', wrap(async (req, re
   const platform = req.params.platform;
   const pub = post.publications[platform];
   if (!pub || pub.status !== 'published') return res.status(400).json({ error: '올라간 게시물이 없어요.' });
+  if (!connections.checkPin(req.body?.pin)) return res.status(403).json({ error: '게시 PIN이 맞지 않아요.' });
+  let deletedBy = 'app';
   try {
     await deletePublication(platform, connections.get(), pub);
   } catch (e) {
-    return res.status(400).json({ error: e.message });
+    // 이미 SNS 앱에서 지워져 있었다면 오류 대신 정리만 한다
+    if (!e.gone && (await exists(platform, connections.get(), pub)) !== false) return res.status(400).json({ error: e.message });
+    deletedBy = 'sns';
   }
-  post.publications[platform] = { ...pub, status: 'deleted', deletedAt: db.now() };
+  post.publications[platform] = { ...pub, status: 'deleted', deletedAt: db.now(), deletedBy };
   db.updatePost(post.id, {});
   res.json(withStatus(post));
 }));
