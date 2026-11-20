@@ -186,6 +186,21 @@ app.get('/api/stores/:id/instagram', wrap(async (req, res) => {
   res.json({ connected: true, items, removed, fetchedAt: db.now() });
 }));
 
+// 게시물 한 개의 인스타 반응 (게시물 화면용)
+app.get('/api/posts/:postId/instagram', wrap(async (req, res) => {
+  const post = needPost(req, res);
+  if (!post) return;
+  const pub = post.publications?.instagram;
+  if (!pub || pub.status !== 'published') return res.status(400).json({ error: '인스타그램에 올라간 게시물이 아니에요.' });
+  try {
+    const data = await igReactions(connections.get(), pub);
+    reactCache.set(pub.id, { at: Date.now(), data });
+    res.json(data);
+  } catch (e) {
+    res.status(400).json({ error: e.message, gone: !!e.gone });
+  }
+}));
+
 app.post('/api/posts/:postId/sync', wrap(async (req, res) => {
   const post = needPost(req, res);
   if (!post) return;

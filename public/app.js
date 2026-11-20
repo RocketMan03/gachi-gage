@@ -614,11 +614,16 @@ function publicationsHtml(post) {
         </div>
       </div>`;
     }).join('')}
+    ${post.publications?.instagram?.status === 'published' ? '<div id="igc" class="ig-comments"><div class="hint">인스타그램 댓글을 불러오는 중…</div></div>' : ''}
     <p class="hint" style="margin:8px 0 0">SNS 앱에서 직접 지워도 여기에 자동으로 반영돼요.</p>
   </div>`;
 }
 
 function renderPostView() {
+  setTimeout(() => loadPostComments(false), 0);
+  return renderPostViewInner();
+}
+function renderPostViewInner() {
   const post = state.post;
   const conn = state.connections || {};
   const imgs = post.images;
@@ -705,6 +710,32 @@ async function openPost(postId) {
   renderPostView();
   snsSync(true);
 }
+
+// 게시물 화면의 '게시 현황' 아래에 인스타 댓글 목록 채우기
+let igcData = null;
+async function loadPostComments(force) {
+  const box = document.getElementById('igc');
+  if (!box || !state.post) return;
+  const id = state.post.id;
+  if (force || !igcData || igcData.postId !== id) {
+    try { igcData = { postId: id, ...(await api('GET', `/api/posts/${id}/instagram`)) }; }
+    catch (err) { box.innerHTML = `<div class="ig-note">댓글을 불러오지 못했어요: ${esc(err.message)}</div>`; return; }
+  }
+  const el = document.getElementById('igc');
+  if (!el || state.post?.id !== id) return;
+  const list = igcData.comments || [];
+  const all = igOpen.has(id);
+  el.innerHTML = `<div class="week-head" style="margin-bottom:2px"><b style="font-size:14px">💬 인스타그램 댓글 ${nf(igcData.counts?.comments ?? list.length)}개</b></div>
+    ${igcData.errors?.comments ? `<div class="ig-note">${esc(igcData.errors.comments)}</div>`
+      : list.length ? (all ? list : list.slice(0, 5)).map(igCommentHtml).join('') + (list.length > 5 ? `<button class="btn ghost" data-igc-more>${all ? '접기' : `댓글 ${list.length - 5}개 더 보기`}</button>` : '')
+      : '<div class="hint" style="padding:6px 0">아직 댓글이 없어요.</div>'}`;
+}
+$app.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-igc-more]') || !state.post) return;
+  const id = state.post.id;
+  igOpen.has(id) ? igOpen.delete(id) : igOpen.add(id);
+  loadPostComments();
+});
 
 async function refreshPost(post) {
   if (post) state.post = post;
@@ -1011,6 +1042,7 @@ $app.addEventListener('click', async (e) => {
       if (act === 'metrics') {
         toast('반응을 불러오는 중…');
         const { post, errors } = await api('POST', `/api/posts/${state.post.id}/metrics`);
+        igcData = null;
         await refreshPost(post);
         const errs = Object.entries(errors);
         if (errs.length) alertBox(errs.map(([k, v]) => `${PF[k].name}: ${v}`).join('\n\n'));
