@@ -4,7 +4,16 @@
 
 ## 실행
 
-`start.bat` 더블클릭 (처음엔 Gemini API 키를 물어보고 패키지를 설치해요) → 브라우저에서 http://localhost:3000
+먼저 [Node.js LTS](https://nodejs.org)를 설치하세요. 처음 실행할 때 Gemini API 키를 물어보고 패키지를 설치한 뒤 브라우저에서 http://localhost:3000 이 열려요.
+
+| 운영체제 | 서버 실행 | 공개 주소(터널) |
+|---|---|---|
+| Windows | `start.bat` 더블클릭 | `tunnel.bat` |
+| macOS | `start.command` 더블클릭 | `tunnel.command` |
+| 어디서나 (터미널) | `npm install` 후 `npm start` | `cloudflared tunnel --url http://localhost:3000` |
+
+- macOS에서 더블클릭이 막히면: `start.command`를 마우스 오른쪽 클릭 → **열기** → **열기**. 또는 터미널에서 프로젝트 폴더로 가서 `./start.command`
+- "권한 없음(permission denied)"이 뜨면 터미널에서 한 번만: `chmod +x start.command tunnel.command`
 
 - Gemini 무료 키: https://aistudio.google.com/apikey
 - 키가 없거나 AI 호출이 실패하면 예시 결과로 대신 보여줘서 시연이 멈추지 않아요 (`FALLBACK_TO_MOCK=true`)
