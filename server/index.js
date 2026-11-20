@@ -72,7 +72,16 @@ app.get('/api/health', (req, res) => {
 });
 
 // ---------- 로그인 ----------
-const userView = (u) => ({ loginId: u.loginId, name: u.name });
+const userView = (u) => ({ loginId: u.loginId, name: u.name, consents: u.consents || null });
+// 약관 동의: 필수(이용약관·개인정보 수집·이용·만 14세 이상) + 선택(마케팅 정보 수신)
+const CONSENT_VERSION = '2026-11-20';
+function cleanConsents(c) {
+  if (!c || typeof c !== 'object') return null;
+  const t = db.now();
+  return { version: CONSENT_VERSION, terms: c.terms === true, privacy: c.privacy === true, age: c.age === true,
+    marketing: c.marketing === true, agreedAt: t, marketingAt: c.marketing === true ? t : null };
+}
+const consentOk = (c) => !!(c && c.terms && c.privacy && c.age);
 // 로그인 전 이 브라우저에서 쓰던 가게(주인 없음)가 있으면 내 계정으로 가져오기
 function claimStore(user, storeId) {
   const s = storeId && db.getStore(storeId);
@@ -84,8 +93,10 @@ app.post('/api/auth/signup', (req, res) => {
   if (!auth.LOGIN_ID.test(loginId)) return res.status(400).json({ error: '아이디는 영문 소문자·숫자·._@- 로 4~40자로 만들어 주세요.' });
   if (password.length < 8 || password.length > 100) return res.status(400).json({ error: '비밀번호는 8자 이상으로 만들어 주세요.' });
   if (db.findUserByLoginId(loginId)) return res.status(409).json({ error: '이미 있는 아이디예요. 다른 아이디를 써 주세요.' });
+  const consents = cleanConsents(req.body?.consents);
+  if (!consentOk(consents)) return res.status(400).json({ error: '필수 약관에 동의해야 가입할 수 있어요.', needConsent: true });
   const { salt, hash } = auth.hashPassword(password);
-  const user = db.createUser({ loginId, name: String(req.body?.name || '').trim().slice(0, 30), salt, passHash: hash });
+  const user = db.createUser({ loginId, name: String(req.body?.name || '').trim().slice(0, 30), salt, passHash: hash, consents });
   claimStore(user, req.body?.claimStoreId);
   auth.startSession(req, res, user);
   res.status(201).json({ user: userView(user), storeId: db.storeOf(user.id)?.id || null });
@@ -96,6 +107,11 @@ app.post('/api/auth/login', (req, res) => {
   if (!user || !auth.checkPassword(String(req.body?.password || ''), user)) {
     auth.addFail(req.ip);
     return res.status(401).json({ error: '아이디나 비밀번호가 맞지 않아요.' });
+  }
+  // 예전 계정이라 동의 기록이 없으면 이번 로그인 때 받은 동의를 남긴다
+  if (!consentOk(user.consents)) {
+    const consents = cleanConsents(req.body?.consents);
+    if (consentOk(consents)) db.updateUser(user.id, { consents });
   }
   claimStore(user, req.body?.claimStoreId);
   auth.startSession(req, res, user);
@@ -110,6 +126,13 @@ app.use('/api', (req, res, next) => {
   req.user = auth.currentUser(req);
   if (!req.user) return res.status(401).json({ error: '로그인이 필요해요.', needLogin: true });
   next();
+});
+// 마케팅 정보 수신 동의는 언제든 바꿀 수 있음 (선택 항목)
+app.put('/api/auth/consent', (req, res) => {
+  const c = { ...(req.user.consents || {}) };
+  if (typeof req.body?.marketing === 'boolean') { c.marketing = req.body.marketing; c.marketingAt = db.now(); }
+  const u = db.updateUser(req.user.id, { consents: c });
+  res.json({ user: userView(u) });
 });
 app.get('/api/auth/me', (req, res) => {
   res.json({ user: userView(req.user), storeId: db.storeOf(req.user.id)?.id || null, connections: connections.view() });

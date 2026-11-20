@@ -354,3 +354,18 @@ button.fb-row:hover { border-color: var(--main); }
 .ob-center .robot { width: 180px; height: 180px; margin-top: 24px; }
 .cheer { text-align: center; }
 .empty .robot { margin-bottom: 0; }
+
+/* ---------- 약관 동의 ---------- */
+.consent .cs-all { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid var(--main); background: var(--soft); border-radius: 12px; margin: 8px 0 10px; cursor: pointer; }
+.cs-all input, .cs-item input { width: 18px; height: 18px; accent-color: var(--main); margin: 0; flex: none; }
+.cs-all .hint { margin-left: auto; }
+.cs-list { padding: 4px 14px; }
+.cs-item { padding: 10px 0; border-top: 1px solid var(--line); }
+.cs-item:first-child { border-top: 0; }
+.cs-item label { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; font-size: 14px; cursor: pointer; }
+.cs-item details { margin: 4px 0 0 26px; border: 0; padding: 0; }
+.cs-item summary { font-size: 12px; font-weight: 500; color: var(--sub); }
+.cs-body { padding: 6px 0 2px; line-height: 1.6; }
+.cs-tag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--sunk); color: var(--sub); }
+.cs-tag.req { background: #fde8ef; color: #b0234f; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }

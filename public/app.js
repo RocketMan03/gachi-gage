@@ -1297,6 +1297,7 @@ function obScreen(body, foot, { back = true } = {}) {
 }
 
 function renderOnboarding() {
+  if (ob.step === 0 && splashDone) ob.step = 1; // 로고는 이미 봤으면 건너뛰기
   const d = ob.data;
   const next = (label = '다음') => `<button type="button" class="btn primary" data-ob="next">${label}</button>`;
   const steps = [
@@ -1358,8 +1359,83 @@ $app.addEventListener('keydown', (e) => {
 });
 
 // ---------- 라우팅 ----------
+// ---------- 처음 화면: 로고 → 약관 동의 → 로그인 ----------
+let splashDone = false;
+function renderSplash() {
+  $nav.classList.add('hidden');
+  $app.innerHTML = `<div class="ob ob-splash">${robot('hello', 'robot splash')}<div class="ob-logo">같이가게</div>
+    <p class="lead" style="text-align:center;margin-top:6px">우리 가게를 이해하는 마케팅 AI</p></div>`;
+  setTimeout(() => { splashDone = true; if (!state.user) render(); }, 1400);
+}
+
+// 약관 내용 (해커톤 시연용 초안 · 정식 서비스 전 법률 검토 필요)
+const CONSENTS = [
+  { k: 'terms', req: true, t: '서비스 이용약관 동의',
+    body: '같이가게는 가게 정보를 바탕으로 홍보 문구·사진을 만들어 드리고, 사장님이 연결한 SNS에 사장님이 확인한 게시물만 올려 드리는 서비스예요. 사장님이 확인하기 전에는 아무것도 자동으로 올리지 않아요. 서비스를 부정하게 쓰거나 다른 사람의 계정을 연결하면 이용이 제한될 수 있어요.' },
+  { k: 'privacy', req: true, t: '개인정보 수집·이용 동의',
+    body: '<b>수집 항목</b> 아이디, 비밀번호(암호화해서 저장), 사장님 이름, 가게 이름·업종·주소·상품, 올린 사진과 문구, 연결한 SNS의 게시물 정보<br><b>이용 목적</b> 회원 확인, 홍보 문구·사진 만들기, SNS 게시와 반응 보여주기<br><b>보유 기간</b> 회원 탈퇴 시 바로 파기 (법령에 따라 보관해야 하는 정보는 그 기간 동안 보관)<br><b>하지 않는 것</b> 비밀번호를 SNS에 넘기지 않고, DM·팔로워 목록을 가져오지 않으며, 다른 곳에 팔거나 넘기지 않아요.<br>동의를 거부할 수 있지만, 필수 항목에 동의하지 않으면 가입할 수 없어요.' },
+  { k: 'age', req: true, t: '만 14세 이상입니다', body: '만 14세 미만은 보호자 동의 없이 가입할 수 없어요.' },
+  { k: 'marketing', req: false, t: '마케팅 정보 수신 동의',
+    body: '새 기능, 이벤트, 소상공인 지원 소식을 앱 알림으로 보내 드려요. 동의하지 않아도 서비스를 모두 쓸 수 있고, 가게 정보 화면에서 언제든 끌 수 있어요.' },
+];
+const getConsent = () => { try { return JSON.parse(lsGet('gachi.consent') || 'null'); } catch { return null; } };
+const consentOk = (c) => !!(c && c.terms && c.privacy && c.age);
+
+function renderConsent() {
+  $nav.classList.add('hidden');
+  const c = getConsent() || {};
+  const all = CONSENTS.every((x) => c[x.k]);
+  $app.innerHTML = `
+    <div class="auth consent">
+      ${robot('guide', 'robot md')}
+      <h1 style="text-align:center;margin:4px 0 6px">약관에 동의해 주세요</h1>
+      <p class="lead" style="text-align:center">사장님 정보를 어떻게 쓰는지 먼저 알려 드릴게요.</p>
+      <label class="cs-all"><input type="checkbox" data-cs="all" ${all ? 'checked' : ''} /> <b>전체 동의</b><span class="hint">선택 항목 포함</span></label>
+      <div class="card cs-list">
+        ${CONSENTS.map((x) => `<div class="cs-item">
+          <label><input type="checkbox" data-cs="${x.k}" ${c[x.k] ? 'checked' : ''} /> <span class="cs-tag ${x.req ? 'req' : ''}">${x.req ? '필수' : '선택'}</span> ${x.t}</label>
+          <details><summary>보기</summary><div class="hint cs-body">${x.body}</div></details>
+        </div>`).join('')}
+      </div>
+      <button type="button" class="btn primary block" data-cs-go ${consentOk(c) ? '' : 'disabled'}>동의하고 시작하기</button>
+      <p class="hint" style="text-align:center;margin-top:10px">해커톤 시연용 약관 초안이에요.</p>
+    </div>`;
+}
+$app.addEventListener('change', (e) => {
+  const cb = e.target.closest('[data-cs]');
+  if (!cb || state.user) return;
+  const c = getConsent() || {};
+  if (cb.dataset.cs === 'all') CONSENTS.forEach((x) => (c[x.k] = cb.checked));
+  else c[cb.dataset.cs] = cb.checked;
+  c.at = new Date().toISOString();
+  lsSet('gachi.consent', JSON.stringify(c));
+  renderConsent();
+});
+$app.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-cs-go]') || state.user) return;
+  if (!consentOk(getConsent())) return toast('필수 항목에 동의해 주세요.');
+  authMode = 'signup';
+  renderAuth();
+});
+
+// 가게 정보 화면 아래: 마케팅 정보 수신 동의 (선택) 켜고 끄기
+function marketingCard() {
+  const on = !!state.user?.consents?.marketing;
+  return `<div class="card"><label class="cs-all" style="margin:0"><input type="checkbox" data-mkt ${on ? 'checked' : ''} /> <b>마케팅 정보 수신 동의</b> <span class="cs-tag">선택</span></label>
+    <p class="hint" style="margin:6px 0 0">새 기능·이벤트·지원 소식을 앱 알림으로 받아요. 끄더라도 서비스는 그대로 쓸 수 있어요.</p></div>`;
+}
+$app.addEventListener('change', async (e) => {
+  const cb = e.target.closest('[data-mkt]');
+  if (!cb) return;
+  try {
+    const r = await api('PUT', '/api/auth/consent', { marketing: cb.checked });
+    state.user = r.user;
+    toast(cb.checked ? '마케팅 정보 수신에 동의했어요.' : '마케팅 정보 수신 동의를 철회했어요.');
+  } catch (err) { cb.checked = !cb.checked; toast(err.message); }
+});
+
 // ---------- 로그인 · 회원가입 ----------
-let authMode = 'login';
+let authMode = consentOk(getConsent()) ? 'login' : 'signup'; // 약관 동의 직후엔 회원가입부터
 function renderAuth() {
   $nav.classList.add('hidden');
   const signup = authMode === 'signup';
@@ -1386,7 +1462,7 @@ function renderAuth() {
     const btn = form.querySelector('[type=submit]');
     btn.disabled = true;
     try {
-      const r = await api('POST', `/api/auth/${signup ? 'signup' : 'login'}`, { loginId: f.loginId.value, password: f.password.value, claimStoreId: lsGet('gachi.storeId') });
+      const r = await api('POST', `/api/auth/${signup ? 'signup' : 'login'}`, { loginId: f.loginId.value, password: f.password.value, claimStoreId: lsGet('gachi.storeId'), consents: getConsent() });
       await afterLogin(r);
     } catch (err) {
       toast(err.message);
@@ -1419,7 +1495,11 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 });
 
 async function render() {
-  if (!state.user) return renderAuth();
+  if (!state.user) {
+    if (!splashDone) return renderSplash();
+    if (!consentOk(getConsent())) return renderConsent();
+    return renderAuth();
+  }
   if (!state.storeId) {
     $nav.classList.add('hidden');
     renderOnboarding();
@@ -1432,7 +1512,7 @@ async function render() {
     if (state.view === 'posts') { await renderPosts(); snsSync(); }
     else if (state.view === 'new') renderNew();
     else if (state.view === 'post') await openPost(state.postId);
-    else if (state.view === 'store') { $app.innerHTML = storeForm(state.store); bindStoreForm(state.store); }
+    else if (state.view === 'store') { $app.innerHTML = storeForm(state.store) + marketingCard(); bindStoreForm(state.store); }
     else if (state.view === 'channels') await renderChannels();
     else if (state.view === 'insta') await renderInsta();
     else if (state.view === 'customers') await renderCustomers();
