@@ -20,10 +20,12 @@ except ImportError:
 
 import ai
 import db
+import ig
 import region
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024  # 사진 1장 최대 12MB
 
 # 플랜 (가격·한도는 팀 논의의 예시이며 확정 전)
 PLANS = {
@@ -154,7 +156,7 @@ def index():
 @app.get("/api/state")
 def state():
     s = db.get(_sid())
-    return jsonify(store=_public(s) if s else None, aiLive=ai.enabled(), plans=PLANS, goals=GOALS)
+    return jsonify(store=_public(s) if s else None, aiLive=ai.enabled(), plans=PLANS, goals=GOALS, ig=ig.status())
 
 
 @app.post("/api/onboard")
@@ -227,6 +229,52 @@ def make_copy():
     return jsonify(store=_public(s), copy=w["copies"][r["id"]])
 
 
+# ---------- 인스타그램 바로 올리기 ----------
+@app.get("/media/<path:name>")
+def media(name):
+    # Meta 서버가 이 주소로 사진을 가져간다 (공개 필요)
+    return send_from_directory(ig.MEDIA_DIR, name)
+
+
+@app.post("/api/photo")
+def upload_photo():
+    s = _store_or_404()
+    w, r = _find_rec(s, request.args.get("rec"))
+    raw = request.get_data()
+    if not raw:
+        abort(400, "사진이 비어 있어요.")
+    try:
+        name = ig.save_photo(raw)
+    except ig.IGError as e:
+        abort(400, str(e))
+    w.setdefault("photos", {})[r["id"]] = name
+    db.save(_sid(), s)
+    return jsonify(store=_public(s))
+
+
+@app.post("/api/instagram/publish")
+def ig_publish():
+    s = _store_or_404()
+    d = request.get_json(force=True)
+    w, r = _find_rec(s, d.get("rec"))
+    if not ig.check_pin(d.get("pin")):
+        abort(403, "게시 PIN이 맞지 않아요.")
+    if (w.get("posts") or {}).get(r["id"]):
+        abort(400, "이미 올린 홍보예요. 인스타그램에서 확인해 주세요.")
+    text = _txt(d.get("text"), 2200)
+    if not text:
+        abort(400, "올릴 문구가 비어 있어요.")
+    try:
+        res = ig.publish((w.get("photos") or {}).get(r["id"]), text)
+    except ig.IGError as e:
+        abort(400, str(e))
+    w.setdefault("posts", {})[r["id"]] = {**res, "at": dt.datetime.now().isoformat(timespec="minutes")}
+    if not r.get("log"):  # 올렸으면 '했어요'로 기록
+        r["log"] = {"done": True, "reason": None, "at": dt.datetime.now().isoformat(timespec="minutes"), "reaction": {}}
+    db.save(_sid(), s)
+    return jsonify(store=_public(s), post=w["posts"][r["id"]])
+
+
 @app.post("/api/log")
 def log():
     s = _store_or_404()
@@ -273,9 +321,12 @@ def reset():
 
 
 @app.errorhandler(400)
+@app.errorhandler(413)
 @app.errorhandler(403)
 @app.errorhandler(404)
 def err(e):
+    if getattr(e, "code", 0) == 413:
+        return jsonify(error="사진이 너무 커요. 12MB 이하로 올려 주세요."), 413
     return jsonify(error=getattr(e, "description", "") or "요청을 처리하지 못했어요."), getattr(e, "code", 400)
 
 

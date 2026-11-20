@@ -81,7 +81,7 @@ async function boot() {
   setTimeout(() => { sp.classList.add("out"); setTimeout(() => sp.remove(), 400); }, 1100);
   try {
     const d = await api("/api/state");
-    Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals });
+    Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals, ig: d.ig || { enabled: false } });
     if (d.store) { S.view = "home"; render(); } else startOnboarding();
   } catch (e) { app.innerHTML = `<p class="loading-text">${esc(e.message)}</p>`; }
 }
@@ -147,6 +147,19 @@ const STEPS = [
       <div><dt>알림</dt><dd>${esc(o.notify)}</dd></div>
       <div><dt>매니저</dt><dd>${esc(mgr(o.manager).name)}</dd></div></dl>` },
 ];
+
+/* ---------- 인스타그램 바로 올리기 ---------- */
+function igBlock(w, r) {
+  const photo = (w.photos || {})[r.id], post = (w.posts || {})[r.id];
+  if (post) return `<div class="ig-done"><strong>인스타그램에 올렸어요</strong>${post.url ? `<a href="${esc(post.url)}" target="_blank" rel="noopener">게시물 보기 ›</a>` : ""}</div>`;
+  return `<div class="ig-box"><div class="field-label">올릴 사진</div>
+    <div class="ig-photo">${photo ? `<img src="/media/${esc(photo)}" alt="올릴 사진">` : "<span>사진을 골라 주세요</span>"}</div>
+    <label class="soft-btn" for="ph-file" style="align-self:flex-start;cursor:pointer">${photo ? "사진 바꾸기" : "사진 고르기"}</label>
+    <input type="file" id="ph-file" accept="image/*" class="vh">
+    ${S.ig?.enabled ? `<button class="cta" id="ig-go" ${photo ? "" : "disabled"}>인스타그램에 바로 올리기</button>
+      <p class="note" style="padding:0">${S.ig.username ? `@${esc(S.ig.username)} 계정에 올라가요.` : esc(S.ig.error || "")}</p>`
+    : `<p class="note" style="padding:0">인스타그램 계정을 연결하면 버튼 하나로 바로 올릴 수 있어요. 지금은 문구를 복사해서 올려 주세요.</p>`}</div>`;
+}
 
 /* ---------- 화면 ---------- */
 const V = {
@@ -220,6 +233,7 @@ const V = {
       <p class="q-sub">${esc(r.title)} · ${esc(r.channel)}</p>
       ${c ? `<div class="result"><textarea id="cp-text" aria-label="홍보 문구">${esc(S.copyText ?? c.text)}</textarea>
           <div class="hashtags">${esc((c.hashtags || []).join(" "))}</div></div>
+        ${igBlock(w, r)}
         <div class="btn-row"><button class="soft-btn yellow" id="cp-copy">문구 복사하기</button><a class="soft-btn" href="https://www.instagram.com/" target="_blank" rel="noopener" style="text-decoration:none">인스타그램 열기</a></div>
         <p class="note">${c.live ? "Claude가 만든 문구예요." : "예시 규칙으로 만든 문구예요."} 올리기 전에 한 번 더 읽어 보세요. 자동으로 올리지 않아요.</p>
         <details class="basis"><summary>들어간 내용 고치고 다시 만들기</summary><div style="display:flex;flex-direction:column;gap:18px;margin-top:14px">
@@ -229,6 +243,19 @@ const V = {
       <div class="usage"><span class="note" style="padding:0">이번 달 문구 만들기 ${plan.used}/${plan.copies}회 사용 · ${esc(plan.name)} 플랜</span><div class="usage-bar"><i style="width:${Math.min(100, plan.used / plan.copies * 100)}%"></i></div></div>
       </div>${c ? `<div class="bottom-cta"><button class="cta" data-log="${r.id}">${r.log ? "기록 고치기" : "올렸어요, 기록하기"}</button></div>`
         : `<div class="bottom-cta"><button class="cta" id="cp-make">문구 만들기</button></div>`}</section>`;
+  },
+  igpost() {
+    const { w, r } = findRec(S.sel); if (!r) return V.home();
+    const c = w.copies[r.id], photo = (w.photos || {})[r.id];
+    const text = (S.copyText ?? c.text) + "\n\n" + (c.hashtags || []).join(" ");
+    const blocked = !S.ig?.publicOk ? "인스타그램은 사진을 공개 주소로 가져가요. 내 컴퓨터(127.0.0.1)가 아니라 Render에 올린 사이트에서 올려 주세요." : "";
+    return `<section class="page"><div class="page-top"><button class="icon-btn round" data-go="copy" aria-label="뒤로">${I.back}</button><span></span></div>
+      <div class="page-body"><h1 class="q">이렇게 올릴까요?</h1><p class="q-sub">@${esc(S.ig?.username || "")} · 인스타그램 피드</p>
+      <div class="ig-preview">${photo ? `<img src="/media/${esc(photo)}" alt="">` : ""}<p>${esc(text)}</p></div>
+      <div class="adjust"><b>확인</b><span>가격, 기간, 가게 이름이 맞는지 한 번 더 봐 주세요. 올린 뒤에는 이 앱에서 지울 수 없고, 인스타그램 앱에서 직접 지워야 해요.</span></div>
+      ${S.ig?.pin ? `<div class="field"><label for="ig-pin">게시 PIN</label><input class="pill-input" id="ig-pin" inputmode="numeric" autocomplete="off" placeholder="팀에서 정한 숫자"></div>` : ""}
+      ${blocked ? `<span class="err-text">${blocked}</span>` : ""}
+      </div><div class="bottom-cta"><button class="cta" id="ig-post" ${blocked || !photo ? "disabled" : ""}>지금 올리기</button></div></section>`;
   },
   logrec() {
     const { r } = findRec(S.sel); if (!r) return V.home();
@@ -391,6 +418,13 @@ document.addEventListener("click", e => {
   if (b.id === "start") { S.ob = newOb(); S.edit = null; S.view = "ob"; return enterStep(0); }
   if (b.id === "demo-pick") { S.demoPick = !S.demoPick; return render(); }
   if (b.id === "cp-make") { syncCopy(); return run("홍보 문구를 쓰고 있어요", async () => { const r = await api("/api/copy", { rec: S.sel, fields: S.copyF }); S.store = r.store; S.copyText = null; render(); }); }
+  if (b.id === "ig-go") { syncCopy(); return go("igpost"); }
+  if (b.id === "ig-post") return run("인스타그램에 올리고 있어요", async () => {
+    const { w } = findRec(S.sel), c = w.copies[S.sel];
+    const text = (S.copyText ?? c.text) + "\n\n" + (c.hashtags || []).join(" ");
+    const r = await api("/api/instagram/publish", { rec: S.sel, text, pin: document.getElementById("ig-pin")?.value || "" });
+    S.store = r.store; go("copy"); toast("인스타그램에 올렸어요. 기록에도 '했어요'로 남겼어요.");
+  });
   if (b.id === "cp-copy") {
     syncCopy(); const { w } = findRec(S.sel); const c = w.copies[S.sel];
     const text = (S.copyText ?? c.text) + "\n\n" + (c.hashtags || []).join(" ");
@@ -415,6 +449,14 @@ document.addEventListener("keydown", e => {
   }
 });
 document.addEventListener("change", e => {
+  if (e.target.id === "ph-file" && e.target.files[0]) {
+    const f = e.target.files[0]; syncCopy();
+    return run("사진을 인스타그램 규격으로 맞추고 있어요", async () => {
+      const r = await fetch(`/api/photo?rec=${encodeURIComponent(S.sel)}`, { method: "POST", headers: { "Content-Type": f.type || "application/octet-stream" }, body: f });
+      const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || "사진을 올리지 못했어요.");
+      S.store = d.store; render();
+    });
+  }
   if (e.target.id === "ob-kind" && S.view === "ob") { syncOb(); if (S.ob.kind !== "기타") S.ob.kind_etc = ""; render(); }
 });
 document.addEventListener("input", e => { if (S.view === "ob" && S.tried && e.target.dataset.ob === "name") { syncOb(); } });
