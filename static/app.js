@@ -4,7 +4,7 @@ const app = document.getElementById("app");
 const tabbar = document.getElementById("tabbar");
 
 const S = { store: null, aiLive: false, plans: {}, goals: {}, view: "welcome", sel: null, step: 0, edit: null,
-  ob: null, tried: false, log: null, copyF: null, copyText: null, demoPick: false };
+  ob: null, tried: false, log: null, copyF: null, copyText: null, demoPick: false, mIdx: 0 };
 
 /* ---------- 아이콘 ---------- */
 const I = {
@@ -39,6 +39,20 @@ const STRENGTHS = {
   "꽃집": ["당일 제작", "맞춤 꽃다발", "배달 가능", "합리적인 가격"],
   "기타": ["친절한 응대", "합리적인 가격", "오래된 단골", "깨끗한 매장"],
 };
+const MANAGERS = [
+  { id: "duri", name: "두리", soft: "#B6C5FD", ink: "#1A2A8C", cta: "#1A3FA5" },
+  { id: "moa", name: "모아", soft: "#D2BEFF", ink: "#42187A", cta: "#42187A" },
+  { id: "tori", name: "토리", soft: "#FFBE98", ink: "#802D00", cta: "#802D00" },
+  { id: "tantan", name: "탄탄", soft: "#A0E39F", ink: "#22420E", cta: "#22420E" },
+];
+const MQUOTE = "“사장님! 어려운건 저와 같이 해봐요.”";
+const josa = w => ((w.charCodeAt(w.length - 1) - 0xAC00) % 28 ? "이" : "가");
+const mgr = id => MANAGERS.find(m => m.id === id) || MANAGERS[0];
+const mImg = id => `/static/img/${mgr(id).id}.png`;
+function applyTheme(id) {
+  const m = mgr(id), r = document.documentElement.style;
+  r.setProperty("--cta", m.cta); r.setProperty("--brand-soft", m.soft); r.setProperty("--brand-ink", m.ink);
+}
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 const NOTIFY = ["매주 월요일 오전", "매주 금요일 오후", "2주마다 월요일 오전"];
 const REASONS = [["time", "시간이 부족했어요"], ["photo", "사진이 없었어요"], ["skip", "필요 없을 것 같았어요"], ["etc", "기타"]];
@@ -52,11 +66,19 @@ async function api(path, body, method) {
   if (!r.ok) throw new Error(d.error || "서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
   return d;
 }
-function busy(t) { const b = document.getElementById("busy"); if (t) { document.getElementById("busy-text").textContent = t; b.hidden = false; } else b.hidden = true; }
+function busy(t) {
+  const b = document.getElementById("busy"); if (!t) { b.hidden = true; return; }
+  const id = S.store?.profile?.manager || S.ob?.manager || "duri";
+  b.querySelector(".busy-card").innerHTML = `<div class="busy-face"><img src="${mImg(id)}" alt=""></div><span class="spin"></span><p>${esc(mgr(id).name)}${josa(mgr(id).name)} ${esc(t)}</p>`;
+  b.hidden = false;
+}
 let tt; function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.hidden = false; clearTimeout(tt); tt = setTimeout(() => t.hidden = true, 2800); }
 async function run(label, fn) { try { if (label) busy(label); await fn(); } catch (e) { toast(e.message); } finally { busy(); } }
 
 async function boot() {
+  MANAGERS.forEach(m => { const im = new Image(); im.src = mImg(m.id); });  // 캐릭터 이미지 미리 불러오기
+  const sp = document.createElement("div"); sp.className = "splash"; sp.innerHTML = '<img src="/static/img/logo.png" alt="같이가게">'; document.body.appendChild(sp);
+  setTimeout(() => { sp.classList.add("out"); setTimeout(() => sp.remove(), 400); }, 1100);
   try {
     const d = await api("/api/state");
     Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals });
@@ -70,32 +92,42 @@ const P = () => S.store.profile;
 const curWeek = () => S.store.weeks[S.store.weeks.length - 1];
 function findRec(id) { for (const w of S.store.weeks) for (const r of w.recs) if (r.id === id) return { w, r }; return {}; }
 const newOb = () => ({ name: "", kind: "", kind_etc: "", region: "", hours: "", closed: [], products: [{ name: "", price: "" }],
-  strengths: [], goals: [], goal_text: "", notify: NOTIFY[0] });
+  strengths: [], goals: [], goal_text: "", notify: NOTIFY[0], manager: "" });
 
 /* ---------- 질문 단계 ---------- */
 const STEPS = [
-  { k: "name", q: "안녕하세요\n가게 이름을 알려주세요", ok: o => o.name.trim().length > 0, err: "가게 이름을 다시 확인해주세요",
-    body: o => `<div class="field ${S.tried && !o.name.trim() ? "err" : ""}"><label for="ob-name">가게 이름</label>
-      <input class="big-input" id="ob-name" data-ob="name" value="${esc(o.name)}" placeholder="가게 이름" autocomplete="off" maxlength="30">
-      ${S.tried && !o.name.trim() ? `<span class="err-text">가게 이름을 다시 확인해주세요</span>` : ""}</div>` },
-  { k: "kind", q: "어떤 가게인가요?", ok: o => !!o.kind && (o.kind !== "기타" || o.kind_etc.trim()), err: "업종을 골라 주세요",
-    body: o => `<div class="tiles">${KINDS.map(([k, ic]) => `<button class="tile" data-kind="${k}" aria-pressed="${o.kind === k}">${I[ic]}<span>${k}</span></button>`).join("")}</div>
-      ${o.kind === "기타" ? `<div class="field"><label for="ob-etc">어떤 가게인지 적어 주세요</label><input class="mid-input" id="ob-etc" data-ob="kind_etc" value="${esc(o.kind_etc)}" placeholder="예) 반찬가게, 공방"></div>` : ""}` },
-  { k: "region", q: "가게는 어디에 있나요?", sub: "동네 이름까지만 적어도 괜찮아요.", ok: () => true,
-    body: o => `<div class="field"><label for="ob-region">주소 또는 동네</label><input class="big-input" id="ob-region" data-ob="region" value="${esc(o.region)}" placeholder="예) 경산시 대학로"></div>` },
+  { k: "store", q: "사장님의 가게를\n알려주세요", ok: o => o.name.trim().length > 0, err: "가게 이름을 다시 확인해주세요",
+    body: o => `<div class="form-gap"><div class="field ${S.tried && !o.name.trim() ? "err" : ""}"><label for="ob-name">가게 이름</label>
+      <input class="pill-input" id="ob-name" data-ob="name" value="${esc(o.name)}" autocomplete="off" maxlength="30">
+      ${S.tried && !o.name.trim() ? `<span class="err-text">가게 이름을 다시 확인해주세요</span>` : ""}</div>
+      <div class="field"><label for="ob-region">가게 주소</label><input class="pill-input" id="ob-region" data-ob="region" value="${esc(o.region)}" placeholder="예) 경산시 대학로" autocomplete="off"></div></div>` },
+  { k: "kind", q: "어떤 업종을 하고 계신가요?", ok: o => !!o.kind && (o.kind !== "기타" || o.kind_etc.trim()), err: "업종을 골라 주세요",
+    body: o => `<div class="form-gap"><div class="field"><label for="ob-kind">업종</label>
+      <select class="pill-input" id="ob-kind" data-ob="kind"><option value="" ${o.kind ? "" : "selected"} disabled hidden></option>
+      ${KINDS.map(([k]) => `<option value="${k}" ${o.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      ${o.kind === "기타" ? `<div class="field"><label for="ob-etc">어떤 가게인지 적어 주세요</label><input class="pill-input" id="ob-etc" data-ob="kind_etc" value="${esc(o.kind_etc)}" placeholder="예) 반찬가게, 공방"></div>` : ""}</div>` },
+  { k: "manager", q: "당신과 함께할\n매니저를 골라주세요", ok: () => true, cta: "선택하기", hint: "추후 설정에서 매니저 변경 할 수 있어요",
+    body: () => { const m = MANAGERS[S.mIdx];
+      return `<div class="mgr"><div class="mgr-card" id="mgr-card">
+        <div class="dots">${MANAGERS.map((x, i) => `<button data-mdot="${i}" aria-label="${x.name}" aria-current="${i === S.mIdx}"></button>`).join("")}</div>
+        <div class="mgr-img"><img src="${mImg(m.id)}" alt="매니저 ${m.name}"></div>
+        <div class="mgr-name">${m.name}</div><div class="mgr-quote">${MQUOTE}</div>
+        <button class="mgr-nav prev" data-mnav="-1" aria-label="이전 매니저">${I.back}</button>
+        <button class="mgr-nav next" data-mnav="1" aria-label="다음 매니저"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4l8 8-8 8"/></svg></button>
+      </div></div>`; } },
   { k: "hours", q: "영업시간을 알려주세요", ok: () => true,
-    body: o => `<div class="field"><label for="ob-hours">영업시간</label><input class="big-input" id="ob-hours" data-ob="hours" value="${esc(o.hours)}" placeholder="예) 10:00 ~ 22:00"></div>
+    body: o => `<div class="field"><label for="ob-hours">영업시간</label><input class="pill-input" id="ob-hours" data-ob="hours" value="${esc(o.hours)}" placeholder="예) 10:00 ~ 22:00"></div>
       <div class="field"><span class="field-label">쉬는 날</span><div class="chips">${DAYS.map(d => `<button class="chip" data-closed="${d}" aria-pressed="${o.closed.includes(d)}">${d}</button>`).join("")}</div></div>` },
   { k: "products", q: "대표 상품과 가격을\n알려주세요", sub: "홍보할 때 가격을 정확하게 쓰기 위해서예요.", ok: o => o.products.some(p => p.name.trim()), err: "대표 상품을 하나 이상 적어 주세요",
     body: o => `${o.products.map((p, i) => `<div class="prod-row">
-        <div class="field"><label for="pn${i}">상품·서비스</label><input class="mid-input" id="pn${i}" data-prod="name" data-i="${i}" value="${esc(p.name)}" placeholder="예) 딸기 라떼"></div>
-        <div class="field"><label for="pp${i}">가격</label><input class="mid-input" id="pp${i}" data-prod="price" data-i="${i}" value="${esc(p.price)}" placeholder="5,500원"></div>
+        <div class="field"><label for="pn${i}">상품·서비스</label><input class="pill-input" id="pn${i}" data-prod="name" data-i="${i}" value="${esc(p.name)}" placeholder="예) 딸기 라떼"></div>
+        <div class="field"><label for="pp${i}">가격</label><input class="pill-input" id="pp${i}" data-prod="price" data-i="${i}" value="${esc(p.price)}" placeholder="5,500원"></div>
         ${o.products.length > 1 ? `<button class="del" data-delprod="${i}" aria-label="삭제">×</button>` : "<span></span>"}</div>`).join("")}
       ${o.products.length < 5 ? `<button class="add-row" id="add-prod">+ 상품 추가</button>` : ""}` },
   { k: "strengths", q: "우리 가게의 자랑은\n뭔가요?", sub: "여러 개 골라도 좋아요. 홍보 문구에 들어가요.", ok: () => true,
     body: o => { const list = [...new Set([...(STRENGTHS[o.kind] || STRENGTHS["기타"]), ...o.strengths])];
       return `<div class="chips">${list.map(x => `<button class="chip" data-str="${esc(x)}" aria-pressed="${o.strengths.includes(x)}">${esc(x)}</button>`).join("")}</div>
-      <div class="field"><label for="ob-str">직접 적기</label><input class="mid-input" id="ob-str" placeholder="예) 창가 자리 햇살" maxlength="30"></div>
+      <div class="field"><label for="ob-str">직접 적기</label><input class="pill-input" id="ob-str" placeholder="예) 창가 자리 햇살" maxlength="30"></div>
       <button class="add-row" id="add-str">+ 추가</button>`; } },
   { k: "goals", q: "이번에 가장 알리고 싶은 건\n뭔가요?", sub: "처음 고른 것을 가장 먼저 추천해요. 3개까지 고를 수 있어요.", ok: o => o.goals.length > 0, err: "하나 이상 골라 주세요",
     body: o => `<div class="choices">${Object.entries(S.goals).map(([k, v]) => { const i = o.goals.indexOf(k);
@@ -113,30 +145,29 @@ const STEPS = [
       <div><dt>대표 상품</dt><dd>${esc(o.products.filter(p => p.name).map(p => p.name + (p.price ? " " + p.price : "")).join(", "))}</dd></div>
       <div><dt>자랑</dt><dd>${esc(o.strengths.join(", ") || "입력 안 함")}</dd></div>
       <div><dt>알리고 싶은 것</dt><dd>${esc(o.goals.map(g => S.goals[g]).join(", "))}</dd></div>
-      <div><dt>알림</dt><dd>${esc(o.notify)}</dd></div></dl>` },
+      <div><dt>알림</dt><dd>${esc(o.notify)}</dd></div>
+      <div><dt>매니저</dt><dd>${esc(mgr(o.manager).name)}</dd></div></dl>` },
 ];
 
 /* ---------- 화면 ---------- */
 const V = {
   welcome() {
     return `<section class="page"><div class="welcome">
-      <svg class="logo" viewBox="0 0 72 72" aria-hidden="true"><rect width="72" height="72" rx="22" fill="#FFD43B"/><path d="M18 32l4-12h28l4 12" fill="none" stroke="#191F28" stroke-width="4" stroke-linejoin="round"/><path d="M20 32v20h32V32" fill="none" stroke="#191F28" stroke-width="4" stroke-linejoin="round"/><path d="M30 52V42h12v10" fill="none" stroke="#191F28" stroke-width="4"/></svg>
+      <img class="brand-logo" src="/static/img/logo.png" alt="같이가게">
       <h1>우리 가게 홍보,<br>이번 주엔 뭘 할지<br>알려드릴게요</h1>
       <p>가게 정보를 한 번만 알려주시면, 매주 우리 가게에 맞는 홍보와 문구를 준비해 드려요.</p>
       ${S.demoPick ? `<div class="tiles">${["PC방", "카페", "미용실"].map(k => `<button class="tile" data-demo="${k}">${I[KIND_IC[k]]}<span>${k}<small>예시 가게로 보기</small></span></button>`).join("")}</div>` : ""}
-    </div><div class="bottom-cta"><button class="cta" id="start">우리 가게 등록하기</button>
+    </div><div class="bottom-cta"><button class="cta" id="start">시작하기</button>
       <button class="cta ghost sm" id="demo-pick">${S.demoPick ? "닫기" : "예시 가게로 둘러보기"}</button></div></section>`;
   },
   ob() {
     const st = STEPS[S.step], o = S.ob, editing = !!S.edit;
-    const pct = editing ? 100 : Math.round((S.step + 1) / STEPS.length * 100);
     const last = S.step === STEPS.length - 1;
     return `<section class="page"><div class="page-top">
-      <button class="icon-btn" id="ob-back" aria-label="${S.step === 0 || editing ? "닫기" : "뒤로"}">${S.step === 0 || editing ? I.close : I.back}</button>
-      ${editing ? "<span></span>" : `<div class="progress" aria-label="진행 ${pct}%"><i style="width:${pct}%"></i></div>`}<span style="width:48px"></span></div>
+      <button class="icon-btn round" id="ob-back" aria-label="뒤로">${I.back}</button><span></span></div>
       <div class="page-body"><h1 class="q">${esc(st.q)}</h1>${st.sub ? `<p class="q-sub">${esc(st.sub)}</p>` : ""}${st.body(o)}
       ${S.tried && !st.ok(o) && st.k !== "name" ? `<span class="err-text">${esc(st.err)}</span>` : ""}</div>
-      <div class="bottom-cta"><button class="cta" id="ob-next">${editing ? "저장하기" : last ? "추천 받기" : "다음"}</button></div></section>`;
+      <div class="bottom-cta">${st.hint ? `<p class="hint-line">${esc(st.hint)}</p>` : ""}<button class="cta" id="ob-next">${editing ? (st.cta || "저장하기") : st.cta || (last ? "추천 받기" : "다음")}</button></div></section>`;
   },
   home() {
     const s = S.store, p = s.profile, w = curWeek(), [top, ...rest] = w.recs;
@@ -144,7 +175,9 @@ const V = {
     const weeks = s.weeks.slice(-6);
     const doneAll = s.weeks.reduce((n, x) => n + x.recs.filter(r => r.log?.done).length, 0);
     return `<section class="screen">
-    <div class="hero"><div><h1>요약</h1><p>${esc(w.label)} · ${esc(p.name)}</p></div><button class="avatar" data-go="info" aria-label="가게 정보">${esc(p.name[0])}</button></div>
+    <div class="hero"><div><h1>요약</h1><p>${esc(w.label)} · ${esc(p.name)}</p></div><button class="avatar mgr" data-go="info" aria-label="가게 정보"><img src="${mImg(p.manager)}" alt=""></button></div>
+    <div class="mgr-bubble"><div class="mgr-face"><img src="${mImg(p.manager)}" alt="매니저 ${mgr(p.manager).name}"></div>
+      <div class="bubble"><b>${mgr(p.manager).name}</b> 사장님! 이번 주는 '${esc(top.title)}'부터 저와 같이 해봐요.</div></div>
     <article class="card"><div class="strip todo">이번 주 할 일 <span>${esc(w.label)}</span></div><div class="card-body">
       ${w.adjust ? `<div class="adjust"><b>기록 반영</b><span>${esc(w.adjust)}</span></div>` : ""}
       <div class="rec-main"><div class="rec-ic">${I.megaphone}</div><div>
@@ -227,7 +260,7 @@ const V = {
     const t = (go, ic, l) => `<button class="ex-tile" data-go="${go}">${I[ic]}<span>${l}</span></button>`;
     return `<section class="screen"><div class="hero"><div><h1>둘러보기</h1></div></div>
       <h2 class="section-title">우리 가게</h2>
-      <div class="explore">${t("info", "store", "가게 정보")}${t("log", "history", "홍보 기록")}${t("region", "map", "우리 동네 소식")}${t("notify", "bell", "알림 설정")}${t("plan", "card", "플랜·사용량")}${t("reset", "restart", "처음부터 다시")}</div>
+      <div class="explore">${t("info", "store", "가게 정보")}${t("log", "history", "홍보 기록")}${t("region", "map", "우리 동네 소식")}${t("notify", "bell", "알림 설정")}<button class="ex-tile" data-edit="2"><span class="mgr-face" style="width:44px;height:44px"><img src="${mImg(P().manager)}" alt=""></span><span>매니저 바꾸기</span></button>${t("plan", "card", "플랜·사용량")}${t("reset", "restart", "처음부터 다시")}</div>
       <p class="note">같이가게는 홍보를 대신 올리지 않아요. 사장님이 확인하고 직접 올리도록 준비와 관리를 도와드려요.</p></section>`;
   },
   info() {
@@ -235,7 +268,7 @@ const V = {
     const row = (step, l, v) => `<button class="row" data-edit="${step}"><span class="row-main"><span>${l}</span><strong>${esc(v || "입력 안 함")}</strong></span><span class="chev">›</span></button>`;
     return `<section class="screen"><div class="hero"><div><h1>가게 정보</h1><p>바뀐 것만 눌러서 고치세요</p></div></div>
       <article class="card"><div class="rows">
-        ${row(0, "가게 이름", p.name)}${row(1, "업종", p.kind === "기타" ? p.kind_etc || "기타" : p.kind)}${row(2, "위치", p.region)}
+        ${row(0, "가게 이름", p.name)}${row(0, "가게 주소", p.region)}${row(1, "업종", p.kind === "기타" ? p.kind_etc || "기타" : p.kind)}${row(2, "매니저", mgr(p.manager).name)}
         ${row(3, "영업시간", p.hours + (p.closed.length ? ` · ${p.closed.join("·")} 휴무` : ""))}
         ${row(4, "대표 상품", p.products.map(x => x.name + (x.price ? " " + x.price : "")).join(", "))}${row(5, "자랑", p.strengths.join(", "))}
         ${row(6, "알리고 싶은 것", p.goals.map(g => S.goals[g]).join(", "))}${row(7, "알림", p.notify)}</div></article>
@@ -270,18 +303,27 @@ const V = {
 const TABBED = { home: "home", log: "log", explore: "explore", info: "explore", region: "explore", plan: "explore" };
 function render() {
   if (S.view === "notify") { startEdit(7); return; }
+  const onMgr = S.view === "ob" && STEPS[S.step]?.k === "manager";
+  applyTheme(onMgr ? MANAGERS[S.mIdx].id : S.view === "ob" ? S.ob?.manager : S.store?.profile?.manager);
   app.innerHTML = (V[S.view] || V.home)();
   const tab = TABBED[S.view];
   tabbar.hidden = !tab || !S.store;
   if (tab) tabbar.innerHTML = [["home", "요약", "heart"], ["log", "기록", "list"], ["explore", "둘러보기", "grid"]]
     .map(([v, l, ic]) => `<button data-go="${v}" ${tab === v ? 'aria-current="page"' : ""}>${I[ic]}${l}</button>`).join("");
   document.querySelector('meta[name="theme-color"]').content = getComputedStyle(document.body).backgroundColor;
+  const card = document.getElementById("mgr-card");
+  if (card) { let x0 = null;
+    card.addEventListener("touchstart", e => x0 = e.touches[0].clientX, { passive: true });
+    card.addEventListener("touchend", e => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null;
+      if (Math.abs(dx) > 40) moveMgr(dx < 0 ? 1 : -1); }); }
 }
 function go(v) { syncOb(); S.view = v; S.tried = false; render(); window.scrollTo(0, 0); }
+function moveMgr(d) { S.mIdx = (S.mIdx + d + MANAGERS.length) % MANAGERS.length; render(); }
+function enterStep(i) { S.step = i; S.tried = false; if (STEPS[i].k === "manager") S.mIdx = Math.max(0, MANAGERS.findIndex(m => m.id === S.ob.manager)); render(); window.scrollTo(0, 0); }
 function startEdit(step) {
   const p = JSON.parse(JSON.stringify(P()));
   if (!p.products.length) p.products = [{ name: "", price: "" }];
-  S.ob = p; S.step = step; S.edit = step; S.tried = false; S.view = "ob"; render(); window.scrollTo(0, 0);
+  S.ob = p; S.edit = step; S.view = "ob"; enterStep(step);
 }
 function syncOb() {
   if (S.view !== "ob" || !S.ob) return;
@@ -316,7 +358,8 @@ document.addEventListener("click", e => {
   // 질문 단계
   if (S.view === "ob") {
     syncOb(); const o = S.ob;
-    if (d.kind) { o.kind = d.kind; if (o.kind !== "기타") o.kind_etc = ""; return render(); }
+    if (d.mnav) return moveMgr(+d.mnav);
+    if (d.mdot) { S.mIdx = +d.mdot; return render(); }
     if (d.closed) { o.closed = o.closed.includes(d.closed) ? o.closed.filter(x => x !== d.closed) : [...o.closed, d.closed]; return render(); }
     if (d.delprod) { o.products.splice(+d.delprod, 1); return render(); }
     if (d.str) { o.strengths = o.strengths.includes(d.str) ? o.strengths.filter(x => x !== d.str) : [...o.strengths, d.str].slice(0, 5); return render(); }
@@ -327,19 +370,20 @@ document.addEventListener("click", e => {
     if (b.id === "ob-back") {
       if (S.edit !== null) { S.edit = null; return go("info"); }
       if (S.step === 0) return go(S.store ? "home" : "welcome");
-      S.step--; S.tried = false; return render();
+      return enterStep(S.step - 1);
     }
     if (b.id === "ob-next") {
       const st = STEPS[S.step];
+      if (st.k === "manager") o.manager = MANAGERS[S.mIdx].id;
       if (!st.ok(o)) { S.tried = true; return render(); }
       S.tried = false;
       if (S.edit !== null) return run("저장하고 있어요", async () => { S.store = (await api("/api/profile", o, "PUT")).store; S.edit = null; go("info"); toast("저장했어요."); });
-      if (S.step < STEPS.length - 1) { S.step++; render(); window.scrollTo(0, 0); return; }
+      if (S.step < STEPS.length - 1) return enterStep(S.step + 1);
       return run("우리 가게에 맞는 홍보를\n찾고 있어요", async () => { S.store = (await api("/api/onboard", o)).store; S.ob = null; go("home"); });
     }
     return;
   }
-  if (b.id === "start") { S.ob = newOb(); S.step = 0; S.edit = null; return go("ob"); }
+  if (b.id === "start") { S.ob = newOb(); S.edit = null; S.view = "ob"; return enterStep(0); }
   if (b.id === "demo-pick") { S.demoPick = !S.demoPick; return render(); }
   if (b.id === "cp-make") { syncCopy(); return run("홍보 문구를 쓰고 있어요", async () => { const r = await api("/api/copy", { rec: S.sel, fields: S.copyF }); S.store = r.store; S.copyText = null; render(); }); }
   if (b.id === "cp-copy") {
@@ -364,6 +408,9 @@ document.addEventListener("keydown", e => {
     if (e.target.id === "ob-str") return document.getElementById("add-str")?.click();
     document.getElementById("ob-next")?.click();
   }
+});
+document.addEventListener("change", e => {
+  if (e.target.id === "ob-kind" && S.view === "ob") { syncOb(); if (S.ob.kind !== "기타") S.ob.kind_etc = ""; render(); }
 });
 document.addEventListener("input", e => { if (S.view === "ob" && S.tried && e.target.dataset.ob === "name") { syncOb(); } });
 

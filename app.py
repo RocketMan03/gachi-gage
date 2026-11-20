@@ -31,6 +31,7 @@ PLANS = {
     "basic": {"name": "기본", "price": 9900, "copies": 30, "features": ["매주 홍보 추천과 알림", "홍보 문구 월 30회", "실행 기록 분석"]},
     "plus": {"name": "플러스", "price": 29000, "copies": 100, "features": ["기본 플랜의 모든 기능", "홍보 문구 월 100회", "리뷰·인사이트 캡처 분석(예정)", "여러 매장 관리(예정)"]},
 }
+MANAGERS = ("duri", "moa", "tori", "tantan")  # 함께할 매니저 캐릭터
 GOALS = {"new": "신메뉴·새 상품 알리기", "quiet": "손님 적은 시간대 채우기", "regular": "단골 손님 늘리기",
          "open": "오픈·리뉴얼 알리기", "event": "행사·할인 알리기"}
 
@@ -90,6 +91,7 @@ def _clean_profile(d):
         "products": prods, "strengths": [_txt(x, 30) for x in (d.get("strengths") or []) if _txt(x, 30)][:5],
         "goals": [g for g in (d.get("goals") or []) if g in GOALS][:3], "goal_text": _txt(d.get("goal_text"), 80),
         "notify": _txt(d.get("notify"), 20) or "매주 월요일 오전",
+        "manager": d.get("manager") if d.get("manager") in MANAGERS else "duri",
     }
     if not p["name"]:
         abort(400, "가게 이름을 다시 확인해 주세요.")
@@ -163,14 +165,14 @@ def onboard():
 SAMPLES = {
     "PC방": {"name": "레벨업 PC방", "kind": "PC방", "region": "경산시 대학로 (영남대 정문 인근)", "hours": "24시간",
             "products": [{"name": "새 게이밍 좌석", "price": "시간당 1,500원"}, {"name": "야간 정액권", "price": "8,000원"}],
-            "strengths": ["새로 바꾼 좌석", "넓은 단체석"], "goals": ["new", "quiet"], "goal_text": "새로 바꾼 좌석을 알리고 싶어요"},
+            "strengths": ["새로 바꾼 좌석", "넓은 단체석"], "goals": ["new", "quiet"], "goal_text": "새로 바꾼 좌석을 알리고 싶어요", "manager": "duri"},
     "카페": {"name": "카페 온담", "kind": "카페", "region": "경산시 대학로 (영남대 정문 인근)", "hours": "10:00 ~ 22:00", "closed": ["월"],
            "products": [{"name": "딸기 라떼", "price": "5,500원"}, {"name": "아메리카노", "price": "3,000원"}],
            "strengths": ["창가 자리 햇살", "직접 만든 디저트"], "goals": ["new", "regular"], "goal_text": "겨울 신메뉴를 알리고 싶어요",
-           "notify": "매주 금요일 오후"},
+           "notify": "매주 금요일 오후", "manager": "tantan"},
     "미용실": {"name": "헤어 살롱 결", "kind": "미용실", "region": "경산시 사동", "hours": "10:00 ~ 20:00", "closed": ["화"],
             "products": [{"name": "남성 커트", "price": "15,000원"}, {"name": "뿌리 염색", "price": "40,000원"}],
-            "strengths": ["1:1 예약제", "꼼꼼한 상담"], "goals": ["quiet", "regular"], "goal_text": "평일 오후 예약이 비어요"},
+            "strengths": ["1:1 예약제", "꼼꼼한 상담"], "goals": ["quiet", "regular"], "goal_text": "평일 오후 예약이 비어요", "manager": "moa"},
 }
 
 
