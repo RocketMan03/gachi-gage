@@ -82,8 +82,7 @@ async function boot() {
   try {
     const d = await api("/api/state");
     Object.assign(S, { store: d.store, aiLive: d.aiLive, plans: d.plans, goals: d.goals });
-    S.view = d.store ? "home" : "welcome";
-    render();
+    if (d.store) { S.view = "home"; render(); } else startOnboarding();
   } catch (e) { app.innerHTML = `<p class="loading-text">${esc(e.message)}</p>`; }
 }
 
@@ -164,7 +163,7 @@ const V = {
     const st = STEPS[S.step], o = S.ob, editing = !!S.edit;
     const last = S.step === STEPS.length - 1;
     return `<section class="page"><div class="page-top">
-      <button class="icon-btn round" id="ob-back" aria-label="뒤로">${I.back}</button><span></span></div>
+      ${S.step === 0 && !S.store && !editing ? '<span style="height:56px"></span>' : `<button class="icon-btn round" id="ob-back" aria-label="뒤로">${I.back}</button>`}<span></span></div>
       <div class="page-body"><h1 class="q">${esc(st.q)}</h1>${st.sub ? `<p class="q-sub">${esc(st.sub)}</p>` : ""}${st.body(o)}
       ${S.tried && !st.ok(o) && st.k !== "name" ? `<span class="err-text">${esc(st.err)}</span>` : ""}</div>
       <div class="bottom-cta">${st.hint ? `<p class="hint-line">${esc(st.hint)}</p>` : ""}<button class="cta" id="ob-next">${editing ? (st.cta || "저장하기") : st.cta || (last ? "추천 받기" : "다음")}</button></div></section>`;
@@ -318,6 +317,12 @@ function render() {
       if (Math.abs(dx) > 40) moveMgr(dx < 0 ? 1 : -1); }); }
 }
 function go(v) { syncOb(); S.view = v; S.tried = false; render(); window.scrollTo(0, 0); }
+function startOnboarding() {
+  // 와이어프레임 순서: 스플래시 → 가게 이름·주소 → 업종 → 매니저 → (이후 질문) → 요약
+  // 발표 시연용 예시 가게 화면은 주소 끝에 #demo 를 붙이면 열린다.
+  if (location.hash === "#demo") { S.view = "welcome"; S.demoPick = true; render(); return; }
+  S.ob = newOb(); S.edit = null; S.view = "ob"; enterStep(0);
+}
 function moveMgr(d) { S.mIdx = (S.mIdx + d + MANAGERS.length) % MANAGERS.length; render(); }
 function enterStep(i) { S.step = i; S.tried = false; if (STEPS[i].k === "manager") S.mIdx = Math.max(0, MANAGERS.findIndex(m => m.id === S.ob.manager)); render(); window.scrollTo(0, 0); }
 function startEdit(step) {
@@ -353,7 +358,7 @@ document.addEventListener("click", e => {
   if (d.copy) return openCopy(d.copy);
   if (d.log) return openLog(d.log);
   if (d.edit) return startEdit(+d.edit);
-  if (d.demo) return run("예시 가게의 이번 주 홍보를 찾고 있어요", async () => { S.store = (await api("/api/demo", { kind: d.demo })).store; S.demoPick = false; go("home"); });
+  if (d.demo) return run("예시 가게의 이번 주 홍보를 찾고 있어요", async () => { S.store = (await api("/api/demo", { kind: d.demo })).store; S.demoPick = false; history.replaceState(null, "", location.pathname); go("home"); });
   if (d.plan) return run("", async () => { S.store = (await api("/api/plan", { plan: d.plan })).store; render(); toast(`${S.plans[d.plan].name} 플랜으로 바꿨어요.`); });
   // 질문 단계
   if (S.view === "ob") {
@@ -369,7 +374,7 @@ document.addEventListener("click", e => {
     if (b.id === "add-str") { const v = document.getElementById("ob-str").value.trim(); if (v && !o.strengths.includes(v)) o.strengths = [...o.strengths, v].slice(0, 5); return render(); }
     if (b.id === "ob-back") {
       if (S.edit !== null) { S.edit = null; return go("info"); }
-      if (S.step === 0) return go(S.store ? "home" : "welcome");
+      if (S.step === 0) return S.store ? go("home") : undefined;
       return enterStep(S.step - 1);
     }
     if (b.id === "ob-next") {
@@ -400,7 +405,7 @@ document.addEventListener("click", e => {
   }
   if (b.id === "next-week") return run("기록을 보고\n다음 주 홍보를 고르고 있어요", async () => { S.store = (await api("/api/next-week", {})).store; go("home"); });
   if (b.id === "refresh") return run("바뀐 정보로 추천을\n다시 찾고 있어요", async () => { S.store = (await api("/api/refresh", {})).store; go("home"); });
-  if (b.id === "reset-yes") return run("", async () => { await api("/api/reset", {}); S.store = null; go("welcome"); });
+  if (b.id === "reset-yes") return run("", async () => { await api("/api/reset", {}); S.store = null; history.replaceState(null, "", location.pathname); startOnboarding(); });
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && S.view === "ob" && e.target.tagName === "INPUT") {
